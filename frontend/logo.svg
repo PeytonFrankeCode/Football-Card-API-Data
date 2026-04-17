@@ -1,0 +1,12 @@
+<svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Card body -->
+  <rect x="2" y="2" width="44" height="44" rx="9" fill="#0D1B2A"/>
+  <rect x="2" y="2" width="44" height="44" rx="9" fill="none" stroke="#F4A623" stroke-width="2.5"/>
+  <!-- Football -->
+  <ellipse cx="24" cy="24" rx="14" ry="9" fill="#F4A623"/>
+  <!-- Laces -->
+  <line x1="24" y1="16" x2="24" y2="32" stroke="#0D1B2A" stroke-width="2" stroke-linecap="round"/>
+  <line x1="20" y1="20" x2="28" y2="20" stroke="#0D1B2A" stroke-width="1.8" stroke-linecap="round"/>
+  <line x1="20" y1="24" x2="28" y2="24" stroke="#0D1B2A" stroke-width="1.8" stroke-linecap="round"/>
+  <line x1="20" y1="28" x2="28" y2="28" stroke="#0D1B2A" stroke-width="1.8" stroke-linecap="round"/>
+</svg>
