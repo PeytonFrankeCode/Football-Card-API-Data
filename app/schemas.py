@@ -73,6 +73,7 @@ class SaleBase(BaseModel):
     condition: str | None = None
     grade: float | None = Field(None, ge=1.0, le=10.0)
     notes: str | None = None
+    listing_url: str | None = None
 
 
 class SaleCreate(SaleBase):
@@ -87,6 +88,7 @@ class SaleUpdate(BaseModel):
     condition: str | None = None
     grade: float | None = Field(None, ge=1.0, le=10.0)
     notes: str | None = None
+    listing_url: str | None = None
 
 
 class SaleOut(SaleBase):
@@ -121,3 +123,31 @@ class TopSale(BaseModel):
     sale_price: float
     sale_date: datetime
     platform: str | None
+
+
+# ── Scrape ────────────────────────────────────────────────────────────────────
+
+class ScrapedListing(BaseModel):
+    title: str
+    sale_price: float
+    sale_date: datetime | None
+    condition: str | None
+    listing_url: str
+
+
+class ScrapeSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, description="eBay search query, e.g. 'Patrick Mahomes 2017 Prizm PSA 10'")
+    max_pages: int = Field(1, ge=1, le=5)
+
+
+class ScrapeImportRequest(BaseModel):
+    card_id: int
+    query: str = Field(..., min_length=1, description="eBay search query for this card")
+    max_pages: int = Field(1, ge=1, le=5)
+
+
+class ScrapeImportResult(BaseModel):
+    imported: int
+    skipped: int
+    errors: int
+    sales: list[SaleOut]

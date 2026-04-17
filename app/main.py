@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from app.database import engine, Base
-from app.routers import players, cards, sales, analytics
+from app.routers import players, cards, sales, analytics, scrape
 
 Base.metadata.create_all(bind=engine)
 
@@ -17,6 +17,7 @@ app.include_router(players.router)
 app.include_router(cards.router)
 app.include_router(sales.router)
 app.include_router(analytics.router)
+app.include_router(scrape.router)
 
 
 @app.get("/", tags=["Health"])

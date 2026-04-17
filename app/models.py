@@ -46,6 +46,7 @@ class Sale(Base):
     condition: Mapped[str | None] = mapped_column(String(20))  # Raw, PSA, BGS, SGC
     grade: Mapped[float | None] = mapped_column(Float)         # e.g. 9.5, 10
     notes: Mapped[str | None] = mapped_column(Text)
+    listing_url: Mapped[str | None] = mapped_column(String(500), unique=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
