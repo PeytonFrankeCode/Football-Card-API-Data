@@ -33,15 +33,10 @@ app.include_router(analytics.router)
 app.include_router(scrape.router)
 
 
-@app.get("/", tags=["Health"])
-def root():
-    return {"status": "ok", "docs": "/docs"}
-
-
-# Serve the frontend only if the directory exists (local dev).
-# On Render the frontend is hosted on GitHub Pages instead.
+# Serve the frontend only if the directory exists (local dev + Render).
+# GitHub Pages also hosts the frontend independently.
 _frontend = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
 )
 if os.path.isdir(_frontend):
-    app.mount("/ui", StaticFiles(directory=_frontend, html=True), name="frontend")
+    app.mount("/", StaticFiles(directory=_frontend, html=True), name="frontend")
