@@ -2,6 +2,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from app.database import engine, Base
 from app.routers import players, cards, sales, analytics, scrape
 
@@ -31,6 +32,16 @@ app.include_router(sales.router)
 app.include_router(analytics.router)
 app.include_router(scrape.router)
 
-# Use absolute path so the app works regardless of working directory
-_frontend = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
-app.mount("/", StaticFiles(directory=_frontend, html=True), name="frontend")
+
+@app.get("/", tags=["Health"])
+def root():
+    return {"status": "ok", "docs": "/docs"}
+
+
+# Serve the frontend only if the directory exists (local dev).
+# On Render the frontend is hosted on GitHub Pages instead.
+_frontend = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
+)
+if os.path.isdir(_frontend):
+    app.mount("/ui", StaticFiles(directory=_frontend, html=True), name="frontend")
