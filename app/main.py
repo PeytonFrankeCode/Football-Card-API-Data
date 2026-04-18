@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -30,5 +31,6 @@ app.include_router(sales.router)
 app.include_router(analytics.router)
 app.include_router(scrape.router)
 
-# Serve the frontend — must come last so API routes take priority
-app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
+# Use absolute path so the app works regardless of working directory
+_frontend = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
+app.mount("/", StaticFiles(directory=_frontend, html=True), name="frontend")
