@@ -61,7 +61,7 @@ def _parse_date(text: str) -> datetime | None:
 
 
 def _parse_page(html: str) -> list[ScrapedListing]:
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
     results: list[ScrapedListing] = []
 
     for item in soup.select(".s-item"):
