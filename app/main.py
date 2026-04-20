@@ -1,11 +1,13 @@
+import asyncio
 import logging
 import os
+
+import httpx
 from fastapi import FastAPI
 
 logging.basicConfig(level=logging.INFO)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
 from app.database import engine, Base
 from app.routers import players, cards, sales, analytics, scrape, auth
 
@@ -37,10 +39,33 @@ app.include_router(analytics.router)
 app.include_router(scrape.router)
 
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+async def _keep_alive():
+    base = os.environ.get("RENDER_EXTERNAL_URL", "https://ebayapidata.onrender.com")
+    url = base.rstrip("/") + "/health"
+    await asyncio.sleep(60)  # wait for full startup before first ping
+    while True:
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.get(url, timeout=10)
+        except Exception:
+            pass
+        await asyncio.sleep(10 * 60)  # ping every 10 minutes
+
+
+@app.on_event("startup")
+async def startup():
+    asyncio.create_task(_keep_alive())
+
+
 # Serve the frontend only if the directory exists (local dev + Render).
-# GitHub Pages also hosts the frontend independently.
 _frontend = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
 )
 if os.path.isdir(_frontend):
     app.mount("/", StaticFiles(directory=_frontend, html=True), name="frontend")
+
