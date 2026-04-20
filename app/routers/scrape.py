@@ -73,25 +73,25 @@ async def scrape_debug():
 
             soup = BeautifulSoup(r.text, "html.parser")
 
-            # Try multiple selectors to find which one eBay uses now
+            # Try multiple selectors
+            srp_lis = soup.select(".srp-results li")
+            s_cards = soup.select(".s-card")
             result["selector_counts"] = {
                 ".s-item": len(soup.select(".s-item")),
-                "li.s-item": len(soup.select("li.s-item")),
-                "[class*=s-item]": len(soup.select("[class*='s-item']")),
-                ".srp-results li": len(soup.select(".srp-results li")),
-                ".s-main-content li": len(soup.select(".s-main-content li")),
+                ".s-card": len(s_cards),
+                ".srp-results li": len(srp_lis),
             }
-
-            # Count raw occurrences of key strings
             result["raw_occurrences"] = {
-                "s-item": r.text.count("s-item"),
-                "s-item__title": r.text.count("s-item__title"),
-                "s-item__price": r.text.count("s-item__price"),
+                "s-card__title": r.text.count("s-card__title"),
+                "s-card__price": r.text.count("s-card__price"),
+                "s-card__image": r.text.count("s-card__image"),
+                "POSITIVE": r.text.count("POSITIVE"),
             }
-
-            # Snippet from middle of HTML where items should be
-            mid = len(r.text) // 3
-            result["mid_snippet"] = r.text[mid:mid+800].replace("\n", " ")
+            # Show first real srp li HTML
+            for li in srp_lis[:5]:
+                if li.select_one("a[href*='itm']"):
+                    result["first_li_html"] = str(li)[:2000]
+                    break
 
             parsed = _parse_page(r.text)
             result["parsed_count"] = len(parsed)
