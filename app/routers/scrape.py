@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 
@@ -7,6 +7,21 @@ from app import models, schemas
 from app.scraper import scrape_sold_listings
 
 router = APIRouter(prefix="/scrape", tags=["Scrape"])
+
+
+@router.get("/search", response_model=list[schemas.ScrapedListing])
+async def search_ebay_get(
+    query: str = Query(..., min_length=1, description="e.g. 'Patrick Mahomes 2017 Prizm PSA 10'"),
+    max_pages: int = Query(1, ge=1, le=3),
+):
+    """Search eBay sold listings directly — used by the website search bar."""
+    results = await scrape_sold_listings(query, max_pages)
+    if not results:
+        raise HTTPException(
+            status_code=404,
+            detail="No sold listings found. Try a broader search query.",
+        )
+    return results
 
 
 @router.post("/search", response_model=list[schemas.ScrapedListing])

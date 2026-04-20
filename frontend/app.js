@@ -169,58 +169,34 @@ async function handleSearch() {
   section.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   try {
-    const players = await api(`/players/?name=${encodeURIComponent(query)}&limit=10`);
-    if (!players.length) {
-      countEl.textContent = '0 results';
-      setHTML('search-results-body', empty(`No players found matching "${esc(query)}".`));
-      return;
-    }
+    const listings = await api(`/scrape/search?query=${encodeURIComponent(query)}&max_pages=2`);
+    countEl.textContent = `${listings.length} sold listing${listings.length !== 1 ? 's' : ''}`;
 
-    const salesArrays = await Promise.all(
-      players.map(p => api(`/sales/?player_id=${p.id}&limit=50`))
-    );
-    const allSales = salesArrays.flat().sort((a, b) => b.sale_price - a.sale_price);
-
-    countEl.textContent = `${allSales.length} result${allSales.length !== 1 ? 's' : ''}`;
-
-    if (!allSales.length) {
-      setHTML('search-results-body', empty('No sales recorded for this player yet. Import some via the scraper!'));
-      return;
-    }
-
-    const rows = allSales.map(s => `
+    const rows = listings.map(s => `
       <tr>
-        <td>
-          <div class="player-cell">
-            <span class="player-name">${esc(s.card.player.name)}</span>
-            <span class="player-team">${esc(s.card.player.team ?? '')}</span>
-          </div>
-        </td>
-        <td>
-          <div class="card-cell">
-            <span class="card-brand">${esc(s.card.year + ' ' + s.card.brand)}${cardBadges(s.card)}</span>
-            <span class="card-sub">${esc(s.card.variant ?? s.card.set_name ?? '—')}</span>
-          </div>
-        </td>
+        <td colspan="2"><div class="card-cell"><span class="card-brand">${esc(s.title)}</span></div></td>
         <td><span class="price">${fmt$(s.sale_price)}</span></td>
-        <td class="col-cond">${esc(s.condition ?? '—')}${s.grade ? ` <strong>${s.grade}</strong>` : ''}</td>
+        <td class="col-cond">${esc(s.condition ?? '—')}</td>
         <td>${fmtDate(s.sale_date)}</td>
-        <td class="col-platform"><span class="platform">${esc(s.platform ?? '—')}</span></td>
+        <td class="col-platform"><a href="${esc(s.listing_url)}" target="_blank" rel="noopener" style="color:var(--gold);text-decoration:underline">View ↗</a></td>
       </tr>`).join('');
 
     setHTML('search-results-body', `
       <div class="table-wrap">
         <table class="data-table">
           <thead><tr>
-            <th>Player</th><th>Card</th><th>Sale Price</th>
+            <th colspan="2">Listing Title</th><th>Sale Price</th>
             <th class="col-cond">Condition</th><th>Date Sold</th>
-            <th class="col-platform">Platform</th>
+            <th class="col-platform">eBay Link</th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>`);
   } catch (e) {
-    setHTML('search-results-body', err('Search failed — make sure the API server is running.'));
+    if (e.message === '404')
+      setHTML('search-results-body', empty(`No eBay sold listings found for "${esc(query)}". Try a different search.`));
+    else
+      setHTML('search-results-body', err('Search failed — the API may be waking up, please try again in 30 seconds.'));
   }
 }
 
