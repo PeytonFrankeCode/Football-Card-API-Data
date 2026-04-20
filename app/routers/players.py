@@ -12,7 +12,7 @@ def list_players(
     team: str | None = Query(None, description="Filter by team"),
     position: str | None = Query(None, description="Filter by position"),
     skip: int = 0,
-    limit: int = Query(50, le=200),
+    limit: int = Query(50, le=1000),
     db: Session = Depends(get_db),
 ):
     q = db.query(models.Player)

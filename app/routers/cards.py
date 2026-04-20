@@ -15,7 +15,7 @@ def list_cards(
     is_autograph: bool | None = Query(None),
     is_patch: bool | None = Query(None),
     skip: int = 0,
-    limit: int = Query(50, le=200),
+    limit: int = Query(50, le=1000),
     db: Session = Depends(get_db),
 ):
     q = db.query(models.Card).options(joinedload(models.Card.player))

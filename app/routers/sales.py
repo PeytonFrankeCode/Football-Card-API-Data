@@ -32,7 +32,7 @@ def list_sales(
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),
     skip: int = 0,
-    limit: int = Query(50, le=200),
+    limit: int = Query(50, le=1000),
     db: Session = Depends(get_db),
 ):
     q = (
