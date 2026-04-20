@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from app.database import engine, Base
-from app.routers import players, cards, sales, analytics, scrape
+from app.routers import players, cards, sales, analytics, scrape, auth
 
 Base.metadata.create_all(bind=engine)
 
@@ -29,6 +29,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(players.router)
 app.include_router(cards.router)
 app.include_router(sales.router)

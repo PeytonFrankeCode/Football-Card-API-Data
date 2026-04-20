@@ -125,6 +125,24 @@ class TopSale(BaseModel):
     platform: str | None
 
 
+# ── Auth / API Keys ───────────────────────────────────────────────────────────
+
+class RegisterRequest(BaseModel):
+    email: str = Field(..., min_length=5, max_length=200, description="Your email address")
+
+class RegisterResponse(BaseModel):
+    email: str
+    api_key: str
+    message: str
+
+class ApiKeyInfo(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    email: str
+    is_active: bool
+    request_count: int
+    created_at: datetime
+
+
 # ── Scrape ────────────────────────────────────────────────────────────────────
 
 class ScrapedListing(BaseModel):
