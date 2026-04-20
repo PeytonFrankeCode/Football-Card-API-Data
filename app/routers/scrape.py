@@ -49,6 +49,35 @@ def _set_cache(db: Session, query: str, results: list[schemas.ScrapedListing]) -
     db.commit()
 
 
+@router.get("/debug")
+async def scrape_debug():
+    """Diagnose the scraper configuration and Worker connectivity."""
+    import os, httpx
+    from app.scraper import _CF_WORKER_URL, _build_url
+
+    cf_url = os.environ.get("CF_WORKER_URL", "")
+    result = {
+        "cf_worker_url_configured": bool(cf_url),
+        "cf_worker_url": cf_url or "(not set)",
+    }
+
+    if cf_url:
+        test_url, extra = _build_url("test mahomes", 1)
+        result["proxied_request_url"] = test_url
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                r = await client.get(test_url, headers=extra)
+            result["worker_http_status"] = r.status_code
+            result["response_bytes"] = len(r.text)
+            result["looks_like_ebay"] = "s-item" in r.text
+            result["captcha_detected"] = "captcha" in r.text.lower()
+            result["html_snippet"] = r.text[:400].replace("\n", " ")
+        except Exception as e:
+            result["error"] = str(e)
+
+    return result
+
+
 @router.get("/search", response_model=list[schemas.ScrapedListing])
 async def search_ebay_get(
     query: str = Query(..., min_length=1, description="e.g. 'Patrick Mahomes 2017 Prizm PSA 10'"),
