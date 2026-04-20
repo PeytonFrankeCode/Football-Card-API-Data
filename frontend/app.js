@@ -205,6 +205,32 @@ function clearSearch() {
   document.getElementById('search-input').value = '';
 }
 
+async function getApiKey() {
+  const email = document.getElementById('api-email').value.trim();
+  if (!email) { alert('Please enter your email.'); return; }
+  try {
+    const r = await fetch('/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const data = await r.json();
+    document.getElementById('api-key-value').textContent = data.api_key;
+    document.getElementById('api-key-result').style.display = 'block';
+  } catch (e) {
+    alert('Could not generate key — please try again.');
+  }
+}
+
+function copyKey() {
+  const key = document.getElementById('api-key-value').textContent;
+  navigator.clipboard.writeText(key).then(() => {
+    const btn = event.target;
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+  });
+}
+
 // XSS guard
 function esc(str) {
   return String(str ?? '')
