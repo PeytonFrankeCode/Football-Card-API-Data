@@ -21,7 +21,9 @@ log = logging.getLogger(__name__)
 
 # Cloudflare Worker proxy URL — set CF_WORKER_URL env var on Render.
 # Optional shared secret — set CF_WORKER_SECRET to match the Worker's CF_SECRET.
-_CF_WORKER_URL    = os.environ.get("CF_WORKER_URL", "").rstrip("/")
+_CF_WORKER_URL = os.environ.get("CF_WORKER_URL", "").rstrip("/")
+if _CF_WORKER_URL and not _CF_WORKER_URL.startswith("http"):
+    _CF_WORKER_URL = "https://" + _CF_WORKER_URL
 _CF_WORKER_SECRET = os.environ.get("CF_WORKER_SECRET", "")
 
 _EBAY_SEARCH_URL = "https://www.ebay.com/sch/i.html"
