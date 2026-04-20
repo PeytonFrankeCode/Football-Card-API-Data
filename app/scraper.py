@@ -1,15 +1,16 @@
 """
 eBay completed/sold listing scraper.
 
-Fetches sold listings from eBay's public search results page.
-eBay's HTML structure can change; selectors are based on current layout.
+Routes requests through ScraperAPI (when SCRAPER_API_KEY is set) to bypass
+eBay's datacenter IP blocks on cloud hosts like Render.
 """
 
 import asyncio
 import logging
+import os
 import re
 from datetime import datetime
-from urllib.parse import urlencode
+from urllib.parse import quote_plus, urlencode
 
 import httpx
 from bs4 import BeautifulSoup
@@ -18,36 +19,39 @@ from app.schemas import ScrapedListing
 
 log = logging.getLogger(__name__)
 
+_SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "")
+
+_EBAY_SEARCH_URL = "https://www.ebay.com/sch/i.html"
+
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Cache-Control": "max-age=0",
 }
-
-_EBAY_SEARCH_URL = "https://www.ebay.com/sch/i.html"
 
 
 def _build_url(query: str, page: int) -> str:
     params = {
         "_nkw": query,
-        "LH_Complete": "1",   # completed listings
-        "LH_Sold": "1",       # sold only
+        "LH_Complete": "1",
+        "LH_Sold": "1",
         "_pgn": page,
-        "_ipg": "60",         # 60 results per page
+        "_ipg": "60",
     }
-    return f"{_EBAY_SEARCH_URL}?{urlencode(params)}"
+    ebay_url = f"{_EBAY_SEARCH_URL}?{urlencode(params)}"
+
+    if _SCRAPER_API_KEY:
+        return (
+            f"http://api.scraperapi.com"
+            f"?api_key={_SCRAPER_API_KEY}"
+            f"&url={quote_plus(ebay_url)}"
+            f"&render=false"
+        )
+    return ebay_url
 
 
 def _parse_price(text: str) -> float | None:
@@ -61,7 +65,6 @@ def _parse_price(text: str) -> float | None:
 
 
 def _parse_date(text: str) -> datetime | None:
-    """Parse eBay sold date strings like 'Apr 10, 2025' or 'Sold  Apr 10, 2025'."""
     cleaned = re.sub(r"(Sold\s*|sold\s*)", "", text).strip()
     for fmt in ("%b %d, %Y", "%B %d, %Y", "%d %b %Y", "%m/%d/%Y"):
         try:
@@ -75,37 +78,30 @@ def _parse_page(html: str) -> list[ScrapedListing]:
     soup = BeautifulSoup(html, "html.parser")
     results: list[ScrapedListing] = []
 
-    for item in soup.select(".s-item"):
-        # Skip the ghost "Shop on eBay" placeholder item
+    for item in soup.select(".s-item, .s-item__pl-on-bottom"):
         title_el = item.select_one(".s-item__title")
         if not title_el or "Shop on eBay" in title_el.get_text():
             continue
 
         title = title_el.get_text(strip=True)
 
-        # Price — prefer the primary price, skip "to" ranges by taking first
         price_el = item.select_one(".s-item__price")
         price_text = price_el.get_text(strip=True) if price_el else ""
-        # Handle price ranges like "$10.00 to $20.00" — take the first number
         price = _parse_price(price_text.split(" to ")[0])
         if price is None:
             continue
 
-        # URL
         link_el = item.select_one("a.s-item__link")
         url = link_el["href"] if link_el and link_el.get("href") else None
         if not url:
             continue
-        # Strip eBay tracking params — keep base item URL
         url = url.split("?")[0]
 
-        # Sold date — eBay puts it in a span with class containing "POSITIVE" or
-        # in .s-item__end-time / .s-item__detail--secondary
         sale_date: datetime | None = None
         for selector in (
+            ".s-item__title--tagblock .POSITIVE",
             ".s-item__end-time",
             ".POSITIVE",
-            ".s-item__detail .POSITIVE",
         ):
             date_el = item.select_one(selector)
             if date_el:
@@ -113,7 +109,6 @@ def _parse_page(html: str) -> list[ScrapedListing]:
                 if sale_date:
                     break
 
-        # Condition
         condition_el = item.select_one(".SECONDARY_INFO")
         condition = condition_el.get_text(strip=True) if condition_el else None
 
@@ -131,40 +126,38 @@ def _parse_page(html: str) -> list[ScrapedListing]:
 
 
 async def scrape_sold_listings(query: str, max_pages: int = 1) -> list[ScrapedListing]:
-    """Async: scrape eBay sold listings for *query* across *max_pages* pages."""
+    """Scrape eBay sold listings. Uses ScraperAPI proxy when SCRAPER_API_KEY is set."""
     all_results: list[ScrapedListing] = []
+    using_proxy = bool(_SCRAPER_API_KEY)
+    log.info("Scraping eBay (proxy=%s) for: %s", using_proxy, query)
 
-    async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True, timeout=20) as client:
+    async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True, timeout=30) as client:
         for page in range(1, max_pages + 1):
             url = _build_url(query, page)
             try:
                 response = await client.get(url)
-                log.info("eBay %s → HTTP %s, %d bytes", url, response.status_code, len(response.text))
+                log.info("HTTP %s, %d bytes (page %d)", response.status_code, len(response.text), page)
                 response.raise_for_status()
             except httpx.HTTPStatusError as e:
-                log.warning("eBay HTTP error: %s", e)
+                log.warning("HTTP error: %s", e)
                 break
             except httpx.HTTPError as e:
-                log.warning("eBay request error: %s", e)
+                log.warning("Request error: %s", e)
                 break
 
-            # Detect bot-block / CAPTCHA pages
-            if "captcha" in response.text.lower() or "robot" in response.text.lower():
-                log.warning("eBay returned bot-detection page (captcha/robot keyword found)")
+            if "captcha" in response.text.lower() or "robot check" in response.text.lower():
+                log.warning("Bot-detection page returned — add SCRAPER_API_KEY to bypass")
                 break
-
-            # Log a snippet of the HTML to help diagnose selector mismatches
-            snippet = response.text[:500].replace("\n", " ")
-            log.info("eBay HTML snippet: %s", snippet)
 
             page_results = _parse_page(response.text)
             log.info("Parsed %d items from page %d", len(page_results), page)
             if not page_results:
+                log.info("HTML snippet: %s", response.text[:300].replace("\n", " "))
                 break
 
             all_results.extend(page_results)
 
             if page < max_pages:
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(1.0)
 
     return all_results
