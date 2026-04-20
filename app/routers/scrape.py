@@ -53,7 +53,8 @@ def _set_cache(db: Session, query: str, results: list[schemas.ScrapedListing]) -
 async def scrape_debug():
     """Diagnose the scraper configuration and Worker connectivity."""
     import os, httpx
-    from app.scraper import _CF_WORKER_URL, _build_url
+    from bs4 import BeautifulSoup
+    from app.scraper import _CF_WORKER_URL, _build_url, _parse_page
 
     cf_url = os.environ.get("CF_WORKER_URL", "")
     result = {
@@ -62,16 +63,35 @@ async def scrape_debug():
     }
 
     if cf_url:
-        test_url, extra = _build_url("test mahomes", 1)
+        test_url, extra = _build_url("mahomes prizm", 1)
         result["proxied_request_url"] = test_url
         try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
                 r = await client.get(test_url, headers=extra)
             result["worker_http_status"] = r.status_code
             result["response_bytes"] = len(r.text)
-            result["looks_like_ebay"] = "s-item" in r.text
-            result["captcha_detected"] = "captcha" in r.text.lower()
-            result["html_snippet"] = r.text[:400].replace("\n", " ")
+
+            soup = BeautifulSoup(r.text, "html.parser")
+            s_items = soup.select(".s-item")
+            pl_items = soup.select(".s-item__pl-on-bottom")
+            result["s_item_count"] = len(s_items)
+            result["s_item_pl_count"] = len(pl_items)
+
+            # Show first real item's raw HTML to check selectors
+            for item in s_items:
+                title_el = item.select_one(".s-item__title")
+                if title_el and "Shop on eBay" not in title_el.get_text():
+                    result["first_item_html"] = str(item)[:1500]
+                    result["first_item_title"] = title_el.get_text(strip=True)
+                    price_el = item.select_one(".s-item__price")
+                    result["first_item_price_text"] = price_el.get_text(strip=True) if price_el else None
+                    break
+
+            parsed = _parse_page(r.text)
+            result["parsed_count"] = len(parsed)
+            if parsed:
+                result["first_parsed"] = parsed[0].model_dump()
+
         except Exception as e:
             result["error"] = str(e)
 
