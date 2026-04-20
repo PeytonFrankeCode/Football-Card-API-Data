@@ -6,14 +6,17 @@ eBay's HTML structure can change; selectors are based on current layout.
 """
 
 import asyncio
+import logging
 import re
 from datetime import datetime
-from urllib.parse import urlencode, quote_plus
+from urllib.parse import urlencode
 
 import httpx
 from bs4 import BeautifulSoup
 
 from app.schemas import ScrapedListing
+
+log = logging.getLogger(__name__)
 
 _HEADERS = {
     "User-Agent": (
@@ -21,8 +24,16 @@ _HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
 }
 
 _EBAY_SEARCH_URL = "https://www.ebay.com/sch/i.html"
@@ -123,22 +134,37 @@ async def scrape_sold_listings(query: str, max_pages: int = 1) -> list[ScrapedLi
     """Async: scrape eBay sold listings for *query* across *max_pages* pages."""
     all_results: list[ScrapedListing] = []
 
-    async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True, timeout=15) as client:
+    async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True, timeout=20) as client:
         for page in range(1, max_pages + 1):
             url = _build_url(query, page)
             try:
                 response = await client.get(url)
+                log.info("eBay %s → HTTP %s, %d bytes", url, response.status_code, len(response.text))
                 response.raise_for_status()
-            except httpx.HTTPError:
+            except httpx.HTTPStatusError as e:
+                log.warning("eBay HTTP error: %s", e)
+                break
+            except httpx.HTTPError as e:
+                log.warning("eBay request error: %s", e)
                 break
 
+            # Detect bot-block / CAPTCHA pages
+            if "captcha" in response.text.lower() or "robot" in response.text.lower():
+                log.warning("eBay returned bot-detection page (captcha/robot keyword found)")
+                break
+
+            # Log a snippet of the HTML to help diagnose selector mismatches
+            snippet = response.text[:500].replace("\n", " ")
+            log.info("eBay HTML snippet: %s", snippet)
+
             page_results = _parse_page(response.text)
+            log.info("Parsed %d items from page %d", len(page_results), page)
             if not page_results:
-                break  # no more results
+                break
 
             all_results.extend(page_results)
 
             if page < max_pages:
-                await asyncio.sleep(1.5)  # be polite between pages
+                await asyncio.sleep(1.5)
 
     return all_results
