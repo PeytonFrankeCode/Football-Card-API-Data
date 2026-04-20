@@ -82,30 +82,40 @@ def _parse_page(html: str) -> list[ScrapedListing]:
     soup = BeautifulSoup(html, "html.parser")
     results: list[ScrapedListing] = []
 
-    for item in soup.select(".s-item, .s-item__pl-on-bottom"):
-        title_el = item.select_one(".s-item__title")
-        if not title_el or "Shop on eBay" in title_el.get_text():
+    for item in soup.select("li.s-card"):
+        # Title — prefer dedicated element, fall back to image alt text
+        title_el = item.select_one(".s-card__title")
+        if title_el:
+            title = title_el.get_text(strip=True)
+        else:
+            img = item.select_one("img.s-card__image")
+            title = img.get("alt", "").strip() if img else ""
+        if not title or "Shop on eBay" in title:
             continue
 
-        title = title_el.get_text(strip=True)
-
-        price_el = item.select_one(".s-item__price")
+        # Price
+        price_el = item.select_one(".s-card__price")
         price_text = price_el.get_text(strip=True) if price_el else ""
         price = _parse_price(price_text.split(" to ")[0])
         if price is None:
             continue
 
-        link_el = item.select_one("a.s-item__link")
-        url = link_el["href"] if link_el and link_el.get("href") else None
+        # URL
+        link_el = item.select_one("a.s-card__link")
+        url = link_el.get("href") if link_el else None
         if not url:
             continue
         url = url.split("?")[0]
 
+        # Sold date — try several candidate selectors
         sale_date: datetime | None = None
         for selector in (
-            ".s-item__title--tagblock .POSITIVE",
-            ".s-item__end-time",
+            ".s-card__subtitle",
+            ".s-card__date",
+            ".su-text--secondary",
             ".POSITIVE",
+            "[class*='date']",
+            "[class*='sold']",
         ):
             date_el = item.select_one(selector)
             if date_el:
@@ -113,7 +123,8 @@ def _parse_page(html: str) -> list[ScrapedListing]:
                 if sale_date:
                     break
 
-        condition_el = item.select_one(".SECONDARY_INFO")
+        # Condition
+        condition_el = item.select_one(".s-card__secondary-info, .SECONDARY_INFO, [class*='condition']")
         condition = condition_el.get_text(strip=True) if condition_el else None
 
         results.append(
