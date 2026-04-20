@@ -72,26 +72,29 @@ async def scrape_debug():
             result["response_bytes"] = len(r.text)
 
             soup = BeautifulSoup(r.text, "html.parser")
-            s_items = soup.select(".s-item")
-            pl_items = soup.select(".s-item__pl-on-bottom")
-            result["s_item_count"] = len(s_items)
-            result["s_item_pl_count"] = len(pl_items)
-            result["html_snippet"] = r.text[:800].replace("\n", " ")
 
-            # Show first real item's raw HTML to check selectors
-            for item in s_items:
-                title_el = item.select_one(".s-item__title")
-                if title_el and "Shop on eBay" not in title_el.get_text():
-                    result["first_item_html"] = str(item)[:1500]
-                    result["first_item_title"] = title_el.get_text(strip=True)
-                    price_el = item.select_one(".s-item__price")
-                    result["first_item_price_text"] = price_el.get_text(strip=True) if price_el else None
-                    break
+            # Try multiple selectors to find which one eBay uses now
+            result["selector_counts"] = {
+                ".s-item": len(soup.select(".s-item")),
+                "li.s-item": len(soup.select("li.s-item")),
+                "[class*=s-item]": len(soup.select("[class*='s-item']")),
+                ".srp-results li": len(soup.select(".srp-results li")),
+                ".s-main-content li": len(soup.select(".s-main-content li")),
+            }
+
+            # Count raw occurrences of key strings
+            result["raw_occurrences"] = {
+                "s-item": r.text.count("s-item"),
+                "s-item__title": r.text.count("s-item__title"),
+                "s-item__price": r.text.count("s-item__price"),
+            }
+
+            # Snippet from middle of HTML where items should be
+            mid = len(r.text) // 3
+            result["mid_snippet"] = r.text[mid:mid+800].replace("\n", " ")
 
             parsed = _parse_page(r.text)
             result["parsed_count"] = len(parsed)
-            if parsed:
-                result["first_parsed"] = parsed[0].model_dump()
 
         except Exception as e:
             result["error"] = str(e)
