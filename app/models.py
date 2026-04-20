@@ -4,6 +4,16 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 
+class SearchCache(Base):
+    __tablename__ = "search_cache"
+
+    query: Mapped[str] = mapped_column(String(500), primary_key=True)
+    results_json: Mapped[str] = mapped_column(Text, nullable=False)
+    cached_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+
 class Player(Base):
     __tablename__ = "players"
 

@@ -1,3 +1,7 @@
+import json
+import logging
+from datetime import datetime, timezone, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
@@ -7,35 +11,76 @@ from app import models, schemas
 from app.scraper import scrape_sold_listings
 
 router = APIRouter(prefix="/scrape", tags=["Scrape"])
+log = logging.getLogger(__name__)
+
+_CACHE_TTL = timedelta(hours=6)
+
+
+def _cache_key(query: str) -> str:
+    return query.lower().strip()
+
+
+def _get_cached(db: Session, query: str) -> list[schemas.ScrapedListing] | None:
+    row = db.get(models.SearchCache, _cache_key(query))
+    if not row:
+        return None
+    age = datetime.now(timezone.utc) - row.cached_at.replace(tzinfo=timezone.utc)
+    if age > _CACHE_TTL:
+        return None
+    try:
+        data = json.loads(row.results_json)
+        return [schemas.ScrapedListing(**item) for item in data]
+    except Exception:
+        return None
+
+
+def _set_cache(db: Session, query: str, results: list[schemas.ScrapedListing]) -> None:
+    def _serial(obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        raise TypeError(f"Not serializable: {type(obj)}")
+
+    row = models.SearchCache(
+        query=_cache_key(query),
+        results_json=json.dumps([r.model_dump() for r in results], default=_serial),
+        cached_at=datetime.now(timezone.utc),
+    )
+    db.merge(row)
+    db.commit()
 
 
 @router.get("/search", response_model=list[schemas.ScrapedListing])
 async def search_ebay_get(
     query: str = Query(..., min_length=1, description="e.g. 'Patrick Mahomes 2017 Prizm PSA 10'"),
     max_pages: int = Query(1, ge=1, le=3),
+    db: Session = Depends(get_db),
 ):
-    """Search eBay sold listings directly — used by the website search bar."""
+    """Search eBay sold listings. Returns cached results (6 h TTL) to minimise scrape calls."""
+    cached = _get_cached(db, query)
+    if cached:
+        log.info("Cache hit for query: %s (%d results)", query, len(cached))
+        return cached
+
     results = await scrape_sold_listings(query, max_pages)
     if not results:
-        raise HTTPException(
-            status_code=404,
-            detail="No sold listings found. Try a broader search query.",
-        )
+        raise HTTPException(status_code=404, detail="No sold listings found. Try a broader search query.")
+
+    _set_cache(db, query, results)
     return results
 
 
 @router.post("/search", response_model=list[schemas.ScrapedListing])
-async def search_ebay(payload: schemas.ScrapeSearchRequest):
-    """
-    Search eBay completed/sold listings and return raw results without saving.
-    Useful for previewing data before deciding which card_id to attach them to.
-    """
+async def search_ebay(payload: schemas.ScrapeSearchRequest, db: Session = Depends(get_db)):
+    """Search eBay completed/sold listings without saving to the sales table."""
+    cached = _get_cached(db, payload.query)
+    if cached:
+        return cached
+
     results = await scrape_sold_listings(payload.query, payload.max_pages)
     if not results:
-        raise HTTPException(
-            status_code=404,
-            detail="No sold listings found. Try a broader search query.",
-        )
+        raise HTTPException(status_code=404, detail="No sold listings found. Try a broader search query.")
+
+    _set_cache(db, payload.query, results)
     return results
 
 
@@ -79,7 +124,7 @@ async def import_ebay_sales(
         )
         db.add(sale)
         try:
-            db.flush()  # catch unique constraint violation per row
+            db.flush()
             imported_sales.append(sale)
         except IntegrityError:
             db.rollback()
@@ -90,7 +135,6 @@ async def import_ebay_sales(
 
     db.commit()
 
-    # Reload with relationships for the response
     loaded = (
         db.query(models.Sale)
         .options(joinedload(models.Sale.card).joinedload(models.Card.player))
