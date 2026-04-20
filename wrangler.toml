@@ -1,3 +1,4 @@
 name = "football-card-api-data"
 main = "cloudflare-worker/worker.js"
 compatibility_date = "2024-09-23"
+# trigger redeploy
