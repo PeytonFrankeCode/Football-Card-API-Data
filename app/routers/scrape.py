@@ -87,11 +87,7 @@ async def scrape_debug():
                 "s-card__image": r.text.count("s-card__image"),
                 "POSITIVE": r.text.count("POSITIVE"),
             }
-            # Show first real srp li HTML
-            for li in srp_lis[:5]:
-                if li.select_one("a[href*='itm']"):
-                    result["first_li_html"] = str(li)[:2000]
-                    break
+            result["html_snippet"] = r.text[:1500].replace("\n", " ")
 
             parsed = _parse_page(r.text)
             result["parsed_count"] = len(parsed)
