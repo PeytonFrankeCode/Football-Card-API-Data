@@ -19,7 +19,10 @@ from app.schemas import ScrapedListing
 
 log = logging.getLogger(__name__)
 
-_SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "")
+# Cloudflare Worker proxy URL — set CF_WORKER_URL env var on Render.
+# Optional shared secret — set CF_WORKER_SECRET to match the Worker's CF_SECRET.
+_CF_WORKER_URL    = os.environ.get("CF_WORKER_URL", "").rstrip("/")
+_CF_WORKER_SECRET = os.environ.get("CF_WORKER_SECRET", "")
 
 _EBAY_SEARCH_URL = "https://www.ebay.com/sch/i.html"
 
@@ -34,7 +37,8 @@ _HEADERS = {
 }
 
 
-def _build_url(query: str, page: int) -> str:
+def _build_url(query: str, page: int) -> tuple[str, dict]:
+    """Return (url, extra_headers) — routes through CF Worker when configured."""
     params = {
         "_nkw": query,
         "LH_Complete": "1",
@@ -44,14 +48,12 @@ def _build_url(query: str, page: int) -> str:
     }
     ebay_url = f"{_EBAY_SEARCH_URL}?{urlencode(params)}"
 
-    if _SCRAPER_API_KEY:
-        return (
-            f"http://api.scraperapi.com"
-            f"?api_key={_SCRAPER_API_KEY}"
-            f"&url={quote_plus(ebay_url)}"
-            f"&render=false"
-        )
-    return ebay_url
+    if _CF_WORKER_URL:
+        proxy_url = f"{_CF_WORKER_URL}?url={quote_plus(ebay_url)}"
+        extra = {"X-Proxy-Secret": _CF_WORKER_SECRET} if _CF_WORKER_SECRET else {}
+        return proxy_url, extra
+
+    return ebay_url, {}
 
 
 def _parse_price(text: str) -> float | None:
@@ -126,16 +128,15 @@ def _parse_page(html: str) -> list[ScrapedListing]:
 
 
 async def scrape_sold_listings(query: str, max_pages: int = 1) -> list[ScrapedListing]:
-    """Scrape eBay sold listings. Uses ScraperAPI proxy when SCRAPER_API_KEY is set."""
+    """Scrape eBay sold listings. Routes through Cloudflare Worker when CF_WORKER_URL is set."""
     all_results: list[ScrapedListing] = []
-    using_proxy = bool(_SCRAPER_API_KEY)
-    log.info("Scraping eBay (proxy=%s) for: %s", using_proxy, query)
+    log.info("Scraping eBay (cf_worker=%s) for: %s", bool(_CF_WORKER_URL), query)
 
     async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True, timeout=30) as client:
         for page in range(1, max_pages + 1):
-            url = _build_url(query, page)
+            url, extra_headers = _build_url(query, page)
             try:
-                response = await client.get(url)
+                response = await client.get(url, headers=extra_headers)
                 log.info("HTTP %s, %d bytes (page %d)", response.status_code, len(response.text), page)
                 response.raise_for_status()
             except httpx.HTTPStatusError as e:
@@ -146,7 +147,7 @@ async def scrape_sold_listings(query: str, max_pages: int = 1) -> list[ScrapedLi
                 break
 
             if "captcha" in response.text.lower() or "robot check" in response.text.lower():
-                log.warning("Bot-detection page returned — add SCRAPER_API_KEY to bypass")
+                log.warning("Bot-detection page — set CF_WORKER_URL to route through Cloudflare")
                 break
 
             page_results = _parse_page(response.text)
