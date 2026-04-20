@@ -76,6 +76,7 @@ async def scrape_debug():
             pl_items = soup.select(".s-item__pl-on-bottom")
             result["s_item_count"] = len(s_items)
             result["s_item_pl_count"] = len(pl_items)
+            result["html_snippet"] = r.text[:800].replace("\n", " ")
 
             # Show first real item's raw HTML to check selectors
             for item in s_items:
