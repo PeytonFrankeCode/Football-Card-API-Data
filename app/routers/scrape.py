@@ -13,7 +13,7 @@ from app.scraper import scrape_sold_listings
 router = APIRouter(prefix="/scrape", tags=["Scrape"])
 log = logging.getLogger(__name__)
 
-_CACHE_TTL = timedelta(hours=6)
+_CACHE_TTL = timedelta(hours=24)
 
 
 def _cache_key(query: str) -> str:
