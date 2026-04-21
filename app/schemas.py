@@ -151,6 +151,7 @@ class ScrapedListing(BaseModel):
     sale_date: datetime | None
     condition: str | None
     listing_url: str
+    image_url: str | None = None
 
 
 class ScrapeSearchRequest(BaseModel):

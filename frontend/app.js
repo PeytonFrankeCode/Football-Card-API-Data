@@ -174,7 +174,10 @@ async function handleSearch() {
 
     const rows = listings.map(s => `
       <tr>
-        <td colspan="2"><div class="card-cell"><span class="card-brand">${esc(s.title)}</span></div></td>
+        <td style="width:54px;padding:6px 8px">
+          ${s.image_url ? `<img src="${esc(s.image_url)}" alt="" style="width:48px;height:48px;object-fit:cover;border-radius:6px;border:1px solid var(--border)">` : ''}
+        </td>
+        <td><div class="card-cell"><span class="card-brand">${esc(s.title)}</span></div></td>
         <td><span class="price">${fmt$(s.sale_price)}</span></td>
         <td class="col-cond">${esc(s.condition ?? '—')}</td>
         <td>${fmtDate(s.sale_date)}</td>
@@ -185,7 +188,7 @@ async function handleSearch() {
       <div class="table-wrap">
         <table class="data-table">
           <thead><tr>
-            <th colspan="2">Listing Title</th><th>Sale Price</th>
+            <th></th><th>Listing Title</th><th>Sale Price</th>
             <th class="col-cond">Condition</th><th>Date Sold</th>
             <th class="col-platform">eBay Link</th>
           </tr></thead>

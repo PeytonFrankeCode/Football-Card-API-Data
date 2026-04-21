@@ -127,6 +127,12 @@ def _parse_page(html: str) -> list[ScrapedListing]:
         condition_el = item.select_one(".s-card__secondary-info, .SECONDARY_INFO, [class*='condition']")
         condition = condition_el.get_text(strip=True) if condition_el else None
 
+        # Image — eBay lazy-loads via data-defer-load
+        img_el = item.select_one("img.s-card__image")
+        image_url = None
+        if img_el:
+            image_url = img_el.get("data-defer-load") or img_el.get("src") or None
+
         results.append(
             ScrapedListing(
                 title=title,
@@ -134,6 +140,7 @@ def _parse_page(html: str) -> list[ScrapedListing]:
                 sale_date=sale_date,
                 condition=condition,
                 listing_url=url,
+                image_url=image_url,
             )
         )
 
