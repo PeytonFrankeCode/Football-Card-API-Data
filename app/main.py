@@ -45,7 +45,7 @@ def health():
 
 
 async def _keep_alive():
-    base = os.environ.get("RENDER_EXTERNAL_URL", "https://ebayapidata.onrender.com")
+    base = os.environ.get("RENDER_EXTERNAL_URL", "https://api.thecardhuddle.com")
     url = base.rstrip("/") + "/health"
     await asyncio.sleep(60)  # wait for full startup before first ping
     while True:
