@@ -196,7 +196,9 @@ async function handleSearch() {
         </table>
       </div>`);
   } catch (e) {
-    if (e.message === '404')
+    if (e.message.startsWith('503'))
+      setHTML('search-results-body', err('eBay is temporarily rate-limiting this search. Please try again in 15 minutes.'));
+    else if (e.message.startsWith('404'))
       setHTML('search-results-body', empty(`No eBay sold listings found for "${esc(query)}". Try a different search.`));
     else
       setHTML('search-results-body', err('Search failed — the API may be waking up, please try again in 30 seconds.'));

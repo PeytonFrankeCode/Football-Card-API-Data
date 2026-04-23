@@ -14,6 +14,7 @@ router = APIRouter(prefix="/scrape", tags=["Scrape"])
 log = logging.getLogger(__name__)
 
 _CACHE_TTL = timedelta(hours=24)
+_BLOCKED_TTL = timedelta(minutes=15)
 
 
 def _cache_key(query: str) -> str:
@@ -21,14 +22,23 @@ def _cache_key(query: str) -> str:
 
 
 def _get_cached(db: Session, query: str) -> list[schemas.ScrapedListing] | None:
+    """
+    Returns:
+      list with items  → valid cached results
+      empty list []    → eBay is rate-limiting this query, wait before retrying
+      None             → no cache, go scrape
+    """
     row = db.get(models.SearchCache, _cache_key(query))
     if not row:
         return None
     age = datetime.now(timezone.utc) - row.cached_at.replace(tzinfo=timezone.utc)
-    if age > _CACHE_TTL:
-        return None
     try:
         data = json.loads(row.results_json)
+        if not data:
+            # Empty result cached — only honour it for the blocked TTL window
+            return [] if age < _BLOCKED_TTL else None
+        if age > _CACHE_TTL:
+            return None
         return [schemas.ScrapedListing(**item) for item in data]
     except Exception:
         return None
@@ -107,15 +117,18 @@ async def search_ebay_get(
     max_pages: int = Query(1, ge=1, le=3),
     db: Session = Depends(get_db),
 ):
-    """Search eBay sold listings. Returns cached results (6 h TTL) to minimise scrape calls."""
+    """Search eBay sold listings. Results cached 24 h; failed queries cooled off 15 min."""
     cached = _get_cached(db, query)
-    if cached:
+    if cached is not None:
+        if not cached:
+            raise HTTPException(status_code=503, detail="eBay is temporarily rate-limiting this search. Please try again in 15 minutes.")
         log.info("Cache hit for query: %s (%d results)", query, len(cached))
         return cached
 
     results = await scrape_sold_listings(query, max_pages)
     if not results:
-        raise HTTPException(status_code=404, detail="No sold listings found. Try a broader search query.")
+        _set_cache(db, query, [])
+        raise HTTPException(status_code=503, detail="eBay is temporarily rate-limiting this search. Please try again in 15 minutes.")
 
     _set_cache(db, query, results)
     return results
@@ -125,12 +138,15 @@ async def search_ebay_get(
 async def search_ebay(payload: schemas.ScrapeSearchRequest, db: Session = Depends(get_db)):
     """Search eBay completed/sold listings without saving to the sales table."""
     cached = _get_cached(db, payload.query)
-    if cached:
+    if cached is not None:
+        if not cached:
+            raise HTTPException(status_code=503, detail="eBay is temporarily rate-limiting this search. Please try again in 15 minutes.")
         return cached
 
     results = await scrape_sold_listings(payload.query, payload.max_pages)
     if not results:
-        raise HTTPException(status_code=404, detail="No sold listings found. Try a broader search query.")
+        _set_cache(db, payload.query, [])
+        raise HTTPException(status_code=503, detail="eBay is temporarily rate-limiting this search. Please try again in 15 minutes.")
 
     _set_cache(db, payload.query, results)
     return results
