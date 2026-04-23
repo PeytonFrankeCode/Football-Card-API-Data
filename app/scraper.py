@@ -1,8 +1,10 @@
 """
 eBay completed/sold listing scraper.
 
-Routes requests through ScraperAPI (when SCRAPER_API_KEY is set) to bypass
-eBay's datacenter IP blocks on cloud hosts like Render.
+Priority order for bypassing eBay bot detection:
+1. ScraperAPI  — set SCRAPER_API_KEY env var (most reliable, handles JS challenges)
+2. CF Worker   — set CF_WORKER_URL env var (fallback)
+3. Direct      — no proxy (blocked on cloud hosts)
 """
 
 import asyncio
@@ -19,8 +21,8 @@ from app.schemas import ScrapedListing
 
 log = logging.getLogger(__name__)
 
-# Cloudflare Worker proxy URL — set CF_WORKER_URL env var on Render.
-# Optional shared secret — set CF_WORKER_SECRET to match the Worker's CF_SECRET.
+_SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "")
+
 _CF_WORKER_URL = os.environ.get("CF_WORKER_URL", "").rstrip("/")
 if _CF_WORKER_URL and not _CF_WORKER_URL.startswith("http"):
     _CF_WORKER_URL = "https://" + _CF_WORKER_URL
@@ -32,7 +34,7 @@ _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
+        "Chrome/131.0.0.0 Safari/537.36"
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
@@ -40,7 +42,7 @@ _HEADERS = {
 
 
 def _build_url(query: str, page: int) -> tuple[str, dict]:
-    """Return (url, extra_headers) — routes through CF Worker when configured."""
+    """Return (url, extra_headers). ScraperAPI > CF Worker > direct."""
     params = {
         "_nkw": query,
         "LH_Complete": "1",
@@ -50,9 +52,20 @@ def _build_url(query: str, page: int) -> tuple[str, dict]:
     }
     ebay_url = f"{_EBAY_SEARCH_URL}?{urlencode(params)}"
 
+    if _SCRAPER_API_KEY:
+        scraper_url = (
+            f"https://api.scraperapi.com"
+            f"?api_key={_SCRAPER_API_KEY}"
+            f"&url={quote_plus(ebay_url)}"
+            f"&render=false"
+        )
+        log.info("Routing through ScraperAPI")
+        return scraper_url, {}
+
     if _CF_WORKER_URL:
         proxy_url = f"{_CF_WORKER_URL}?url={quote_plus(ebay_url)}"
         extra = {"X-Proxy-Secret": _CF_WORKER_SECRET} if _CF_WORKER_SECRET else {}
+        log.info("Routing through CF Worker")
         return proxy_url, extra
 
     return ebay_url, {}
@@ -148,9 +161,9 @@ def _parse_page(html: str) -> list[ScrapedListing]:
 
 
 async def scrape_sold_listings(query: str, max_pages: int = 1) -> list[ScrapedListing]:
-    """Scrape eBay sold listings. Routes through Cloudflare Worker when CF_WORKER_URL is set."""
+    """Scrape eBay sold listings. Uses ScraperAPI > CF Worker > direct, in that order."""
     all_results: list[ScrapedListing] = []
-    log.info("Scraping eBay (cf_worker=%s) for: %s", bool(_CF_WORKER_URL), query)
+    log.info("Scraping eBay (scraperapi=%s, cf_worker=%s) for: %s", bool(_SCRAPER_API_KEY), bool(_CF_WORKER_URL), query)
 
     async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True, timeout=30) as client:
         for page in range(1, max_pages + 1):

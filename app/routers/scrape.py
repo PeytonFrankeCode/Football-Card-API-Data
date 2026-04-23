@@ -54,15 +54,18 @@ async def scrape_debug():
     """Diagnose the scraper configuration and Worker connectivity."""
     import os, httpx
     from bs4 import BeautifulSoup
-    from app.scraper import _CF_WORKER_URL, _build_url, _parse_page
+    from app.scraper import _CF_WORKER_URL, _SCRAPER_API_KEY, _build_url, _parse_page
 
     cf_url = os.environ.get("CF_WORKER_URL", "")
+    scraper_key = os.environ.get("SCRAPER_API_KEY", "")
     result = {
+        "scraper_api_configured": bool(scraper_key),
         "cf_worker_url_configured": bool(cf_url),
         "cf_worker_url": cf_url or "(not set)",
+        "active_proxy": "scraperapi" if scraper_key else ("cf_worker" if cf_url else "direct"),
     }
 
-    if cf_url:
+    if cf_url or scraper_key:
         test_url, extra = _build_url("mahomes prizm", 1)
         result["proxied_request_url"] = test_url
         try:
