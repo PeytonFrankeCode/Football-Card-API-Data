@@ -184,8 +184,9 @@ async def scrape_sold_listings(query: str, max_pages: int = 1) -> list[ScrapedLi
                     log.warning("Request error: %s", e)
                     break
 
-                if "captcha" in response.text.lower() or "robot check" in response.text.lower():
-                    log.warning("Bot-detection page — set CF_WORKER_URL to route through Cloudflare")
+                body = response.text.lower()
+                if "captcha" in body or "robot check" in body or "pardon our interruption" in body:
+                    log.warning("Bot-detection page received for query: %s", query)
                     break
 
                 page_results = _parse_page(response.text)

@@ -60,8 +60,8 @@ def _set_cache(db: Session, query: str, results: list[schemas.ScrapedListing]) -
 
 
 @router.get("/debug")
-async def scrape_debug():
-    """Diagnose the scraper configuration and Worker connectivity."""
+async def scrape_debug(test: bool = Query(False, description="Set to true to actually fire a test request to eBay")):
+    """Show scraper configuration. Pass ?test=true to also fire a live eBay request."""
     import os, httpx
     from bs4 import BeautifulSoup
     from app.scraper import _CF_WORKER_URL, _SCRAPER_API_KEY, _build_url, _parse_page
@@ -75,7 +75,7 @@ async def scrape_debug():
         "active_proxy": "scraperapi" if scraper_key else ("cf_worker" if cf_url else "direct"),
     }
 
-    if cf_url or scraper_key:
+    if test and (cf_url or scraper_key):
         test_url, extra = _build_url("mahomes prizm", 1)
         result["proxied_request_url"] = test_url
         try:
@@ -83,30 +83,20 @@ async def scrape_debug():
                 r = await client.get(test_url, headers=extra)
             result["worker_http_status"] = r.status_code
             result["response_bytes"] = len(r.text)
+            result["bot_detected"] = "pardon our interruption" in r.text.lower()
 
             soup = BeautifulSoup(r.text, "html.parser")
-
-            # Try multiple selectors
-            srp_lis = soup.select(".srp-results li")
-            s_cards = soup.select(".s-card")
             result["selector_counts"] = {
                 ".s-item": len(soup.select(".s-item")),
-                ".s-card": len(s_cards),
-                ".srp-results li": len(srp_lis),
+                ".s-card": len(soup.select(".s-card")),
+                ".srp-results li": len(soup.select(".srp-results li")),
             }
-            result["raw_occurrences"] = {
-                "s-card__title": r.text.count("s-card__title"),
-                "s-card__price": r.text.count("s-card__price"),
-                "s-card__image": r.text.count("s-card__image"),
-                "POSITIVE": r.text.count("POSITIVE"),
-            }
-            result["html_snippet"] = r.text[:1500].replace("\n", " ")
-
-            parsed = _parse_page(r.text)
-            result["parsed_count"] = len(parsed)
+            result["parsed_count"] = len(_parse_page(r.text))
 
         except Exception as e:
             result["error"] = str(e)
+    elif not test:
+        result["note"] = "Config only. Add ?test=true to fire a live eBay request."
 
     return result
 
