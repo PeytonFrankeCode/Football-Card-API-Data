@@ -21,6 +21,10 @@ from app.schemas import ScrapedListing
 
 log = logging.getLogger(__name__)
 
+# Only 1 concurrent eBay request — simultaneous searches queue up rather than
+# all hitting eBay at once, which is what triggers Akamai rate-limiting.
+_ebay_semaphore = asyncio.Semaphore(1)
+
 _SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "")
 
 _CF_WORKER_URL = os.environ.get("CF_WORKER_URL", "").rstrip("/")
@@ -165,33 +169,34 @@ async def scrape_sold_listings(query: str, max_pages: int = 1) -> list[ScrapedLi
     all_results: list[ScrapedListing] = []
     log.info("Scraping eBay (scraperapi=%s, cf_worker=%s) for: %s", bool(_SCRAPER_API_KEY), bool(_CF_WORKER_URL), query)
 
-    async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True, timeout=30) as client:
-        for page in range(1, max_pages + 1):
-            url, extra_headers = _build_url(query, page)
-            try:
-                response = await client.get(url, headers=extra_headers)
-                log.info("HTTP %s, %d bytes (page %d)", response.status_code, len(response.text), page)
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                log.warning("HTTP error: %s", e)
-                break
-            except httpx.HTTPError as e:
-                log.warning("Request error: %s", e)
-                break
+    async with _ebay_semaphore:
+        async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True, timeout=30) as client:
+            for page in range(1, max_pages + 1):
+                url, extra_headers = _build_url(query, page)
+                try:
+                    response = await client.get(url, headers=extra_headers)
+                    log.info("HTTP %s, %d bytes (page %d)", response.status_code, len(response.text), page)
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    log.warning("HTTP error: %s", e)
+                    break
+                except httpx.HTTPError as e:
+                    log.warning("Request error: %s", e)
+                    break
 
-            if "captcha" in response.text.lower() or "robot check" in response.text.lower():
-                log.warning("Bot-detection page — set CF_WORKER_URL to route through Cloudflare")
-                break
+                if "captcha" in response.text.lower() or "robot check" in response.text.lower():
+                    log.warning("Bot-detection page — set CF_WORKER_URL to route through Cloudflare")
+                    break
 
-            page_results = _parse_page(response.text)
-            log.info("Parsed %d items from page %d", len(page_results), page)
-            if not page_results:
-                log.info("HTML snippet: %s", response.text[:300].replace("\n", " "))
-                break
+                page_results = _parse_page(response.text)
+                log.info("Parsed %d items from page %d", len(page_results), page)
+                if not page_results:
+                    log.info("HTML snippet: %s", response.text[:300].replace("\n", " "))
+                    break
 
-            all_results.extend(page_results)
+                all_results.extend(page_results)
 
-            if page < max_pages:
-                await asyncio.sleep(1.0)
+                if page < max_pages:
+                    await asyncio.sleep(1.0)
 
     return all_results
