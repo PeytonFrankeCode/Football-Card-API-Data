@@ -2,13 +2,16 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "football-card-api-data",
   "compatibility_date": "2026-04-20",
-  "observability": {
-    "enabled": true
-  },
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
   "assets": {
-    "directory": "docs"
+    "directory": "frontend"
   },
-  "compatibility_flags": [
-    "nodejs_compat"
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "gridironcards",
+      "database_id": "REPLACE_WITH_YOUR_D1_ID"
+    }
   ]
 }
