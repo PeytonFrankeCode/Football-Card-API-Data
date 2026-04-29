@@ -1,5 +1,5 @@
-// GridironCards API — Cloudflare Pages Function backed by D1
-// Handles all API routes; static files in frontend/ are served directly by Pages.
+// GridironCards API — Cloudflare Worker backed by D1
+// Static assets in frontend/ are served by Cloudflare Assets; this Worker handles all API routes.
 
 const CACHE_TTL_MS   = 24 * 60 * 60 * 1000;  // 24 h
 const BLOCKED_TTL_MS = 15 * 60 * 1000;         // 15 min
@@ -21,26 +21,26 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ── Entry point ────────────────────────────────────────────────────────────
 
-export async function onRequest(context) {
-  const { request, env } = context;
+export default {
+  async fetch(request, env) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key',
+        },
+      });
+    }
 
-  if (request.method === 'OPTIONS') {
-    return new Response(null, {
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key',
-      },
-    });
-  }
-
-  try {
-    return await route(request, env);
-  } catch (e) {
-    console.error(e);
-    return err(e.message || 'Internal server error', 500);
-  }
-}
+    try {
+      return await route(request, env);
+    } catch (e) {
+      console.error(e);
+      return err(e.message || 'Internal server error', 500);
+    }
+  },
+};
 
 // ── Router ─────────────────────────────────────────────────────────────────
 
