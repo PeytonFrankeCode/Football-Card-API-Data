@@ -519,97 +519,52 @@ async function scrapeImport(request, env) {
 }
 
 async function scrapeDebug(url, env) {
-  const cfUrl  = (env.CF_WORKER_URL || '').trim().replace(/\/$/, '');
+  const scraperUrl = (env.SCRAPER_URL || '').trim().replace(/\/$/, '');
   const result = {
-    cf_worker_url_configured: Boolean(cfUrl),
-    cf_worker_url: cfUrl || '(not set)',
-    active_proxy:  cfUrl ? 'cf_worker' : 'direct',
-    note: 'Add ?test=true to fire a live eBay request.',
+    scraper_url_configured: Boolean(scraperUrl),
+    scraper_url: scraperUrl || '(not set — deploy scraper-service and set SCRAPER_URL)',
+    note: 'Add ?test=true to fire a live test through the scraper service.',
   };
 
   if (url.searchParams.get('test') === 'true') {
-    const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=mahomes+prizm&LH_Complete=1&LH_Sold=1&_pgn=1&_ipg=60`;
-    try {
-      // Try proxy, auto-fall-back to direct
-      let r, usedProxy = false;
-      if (cfUrl) {
-        const proxyUrl = `${cfUrl}?url=${encodeURIComponent(ebayUrl)}`;
-        r = await fetch(proxyUrl, { headers: SCRAPE_HEADERS });
-        if (r.ok) { usedProxy = true; result.proxied_request_url = proxyUrl; }
-        else result.proxy_status = r.status;
-      }
-      if (!usedProxy) {
-        r = await fetch(ebayUrl, { headers: SCRAPE_HEADERS });
-        result.active_proxy = 'direct_fallback';
-      }
-      const text  = await r.text();
-      const lower = text.toLowerCase();
-      result.worker_http_status = r.status;
-      result.response_bytes     = text.length;
-      result.bot_detected       = lower.includes('pardon our interruption') || lower.includes('captcha') || lower.includes('robot check');
-      result.parsed_count       = (await parseEbayHtml(text)).length;
-      result.html_snippet       = text.slice(0, 3000);
-    } catch (e) { result.error = e.message; }
+    if (!scraperUrl) {
+      result.error = 'SCRAPER_URL not configured';
+    } else {
+      try {
+        const r    = await fetch(`${scraperUrl}/scrape`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ query: 'mahomes prizm', max_pages: 1 }),
+        });
+        const data = await r.json();
+        result.scraper_http_status = r.status;
+        result.parsed_count        = Array.isArray(data) ? data.length : 0;
+        result.sample              = Array.isArray(data) ? data.slice(0, 2) : data;
+      } catch (e) { result.error = e.message; }
+    }
   }
 
   return json(result);
 }
 
-// ── eBay scraper ────────────────────────────────────────────────────────────
-
-const SCRAPE_HEADERS = {
-  'User-Agent':                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  'Accept':                    'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-  'Accept-Language':           'en-US,en;q=0.9',
-  'Accept-Encoding':           'gzip, deflate, br',
-  'Referer':                   'https://www.google.com/',
-  'Upgrade-Insecure-Requests': '1',
-  'Sec-Ch-Ua':                 '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-  'Sec-Ch-Ua-Mobile':          '?0',
-  'Sec-Ch-Ua-Platform':        '"Windows"',
-  'Sec-Fetch-Dest':            'document',
-  'Sec-Fetch-Mode':            'navigate',
-  'Sec-Fetch-Site':            'cross-site',
-  'Sec-Fetch-User':            '?1',
-  'Cache-Control':             'max-age=0',
-};
-
-async function fetchEbay(ebayUrl, cfUrl) {
-  if (cfUrl) {
-    try {
-      const r = await fetch(`${cfUrl}?url=${encodeURIComponent(ebayUrl)}`, { headers: SCRAPE_HEADERS });
-      if (r.ok) return r;
-    } catch { /* proxy dead, fall through */ }
-  }
-  return fetch(ebayUrl, { headers: SCRAPE_HEADERS });
-}
+// ── eBay scraper (delegates to external scraper-service) ────────────────────
 
 async function scrapeEbay(query, maxPages, env) {
-  const cfUrl = (env.CF_WORKER_URL || '').trim().replace(/\/$/, '');
-  const all   = [];
+  const scraperUrl = (env.SCRAPER_URL || '').trim().replace(/\/$/, '');
+  if (!scraperUrl) return [];
 
-  for (let page = 1; page <= maxPages; page++) {
-    const params  = new URLSearchParams({ _nkw: query, LH_Complete: '1', LH_Sold: '1', _pgn: String(page), _ipg: '60' });
-    const ebayUrl = `https://www.ebay.com/sch/i.html?${params}`;
-
-    let text;
-    try {
-      const r = await fetchEbay(ebayUrl, cfUrl);
-      if (!r.ok) break;
-      text = await r.text();
-    } catch { break; }
-
-    const lower = text.toLowerCase();
-    if (lower.includes('pardon our interruption') || lower.includes('captcha') || lower.includes('robot check')) break;
-
-    const items = await parseEbayHtml(text);
-    if (!items.length) break;
-    all.push(...items);
-
-    if (page < maxPages) await sleep(1000);
+  try {
+    const r = await fetch(`${scraperUrl}/scrape`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ query, max_pages: maxPages }),
+    });
+    if (!r.ok) return [];
+    const data = await r.json();
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
   }
-
-  return all;
 }
 
 // ── HTML parser (HTMLRewriter) ──────────────────────────────────────────────
