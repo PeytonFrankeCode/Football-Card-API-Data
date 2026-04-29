@@ -527,13 +527,22 @@ async function scrapeDebug(url, env) {
     note: 'Add ?test=true to fire a live eBay request.',
   };
 
-  if (url.searchParams.get('test') === 'true' && cfUrl) {
-    const ebayUrl  = `https://www.ebay.com/sch/i.html?_nkw=mahomes+prizm&LH_Complete=1&LH_Sold=1&_pgn=1&_ipg=60`;
-    const proxyUrl = `${cfUrl}?url=${encodeURIComponent(ebayUrl)}`;
-    result.proxied_request_url = proxyUrl;
+  if (url.searchParams.get('test') === 'true') {
+    const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=mahomes+prizm&LH_Complete=1&LH_Sold=1&_pgn=1&_ipg=60`;
     try {
-      const r    = await fetch(proxyUrl, { headers: SCRAPE_HEADERS });
-      const text = await r.text();
+      // Try proxy, auto-fall-back to direct
+      let r, usedProxy = false;
+      if (cfUrl) {
+        const proxyUrl = `${cfUrl}?url=${encodeURIComponent(ebayUrl)}`;
+        r = await fetch(proxyUrl, { headers: SCRAPE_HEADERS });
+        if (r.ok) { usedProxy = true; result.proxied_request_url = proxyUrl; }
+        else result.proxy_status = r.status;
+      }
+      if (!usedProxy) {
+        r = await fetch(ebayUrl, { headers: SCRAPE_HEADERS });
+        result.active_proxy = 'direct_fallback';
+      }
+      const text  = await r.text();
       const lower = text.toLowerCase();
       result.worker_http_status = r.status;
       result.response_bytes     = text.length;
@@ -558,18 +567,27 @@ const SCRAPE_HEADERS = {
   'Sec-Fetch-Dest':  'document',
 };
 
+async function fetchEbay(ebayUrl, cfUrl) {
+  if (cfUrl) {
+    try {
+      const r = await fetch(`${cfUrl}?url=${encodeURIComponent(ebayUrl)}`, { headers: SCRAPE_HEADERS });
+      if (r.ok) return r;
+    } catch { /* proxy dead, fall through */ }
+  }
+  return fetch(ebayUrl, { headers: SCRAPE_HEADERS });
+}
+
 async function scrapeEbay(query, maxPages, env) {
   const cfUrl = (env.CF_WORKER_URL || '').trim().replace(/\/$/, '');
   const all   = [];
 
   for (let page = 1; page <= maxPages; page++) {
-    const params   = new URLSearchParams({ _nkw: query, LH_Complete: '1', LH_Sold: '1', _pgn: String(page), _ipg: '60' });
-    const ebayUrl  = `https://www.ebay.com/sch/i.html?${params}`;
-    const fetchUrl = cfUrl ? `${cfUrl}?url=${encodeURIComponent(ebayUrl)}` : ebayUrl;
+    const params  = new URLSearchParams({ _nkw: query, LH_Complete: '1', LH_Sold: '1', _pgn: String(page), _ipg: '60' });
+    const ebayUrl = `https://www.ebay.com/sch/i.html?${params}`;
 
     let text;
     try {
-      const r = await fetch(fetchUrl, { headers: SCRAPE_HEADERS });
+      const r = await fetchEbay(ebayUrl, cfUrl);
       if (!r.ok) break;
       text = await r.text();
     } catch { break; }
