@@ -48,10 +48,13 @@ async function route(request, env) {
   const url    = new URL(request.url);
   const method = request.method;
   const seg    = url.pathname.replace(/\/$/, '').split('/').filter(Boolean);
-  const [r0, r1, r2] = seg;
+  const [r0, r1] = seg;
 
-  if (!r0)                          return json({ name: 'GridironCards API', version: '2.0.0', docs: '/docs' });
-  if (r0 === 'health')              return json({ status: 'ok' });
+  // Known API segments — everything else falls through to static assets
+  const API = new Set(['health', 'auth', 'players', 'cards', 'sales', 'analytics', 'scrape']);
+  if (!r0 || !API.has(r0)) return env.ASSETS.fetch(request);
+
+  if (r0 === 'health') return json({ status: 'ok' });
 
   if (r0 === 'auth') {
     if (r1 === 'register' && method === 'POST') return authRegister(request, env);
@@ -111,7 +114,7 @@ async function route(request, env) {
     if (r1 === 'debug'  && method === 'GET')  return scrapeDebug(url, env);
   }
 
-  return err('Not found', 404);
+  return env.ASSETS.fetch(request);
 }
 
 // ── Players ────────────────────────────────────────────────────────────────
