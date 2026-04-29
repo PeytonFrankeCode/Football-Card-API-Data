@@ -2,7 +2,7 @@
 // Static assets in frontend/ are served by Cloudflare Assets; this Worker handles all API routes.
 
 const CACHE_TTL_MS   = 24 * 60 * 60 * 1000;  // 24 h
-const BLOCKED_TTL_MS = 15 * 60 * 1000;         // 15 min
+const BLOCKED_TTL_MS =  2 * 60 * 1000;         //  2 min
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -110,8 +110,9 @@ async function route(request, env) {
       if (method === 'GET')  return scrapeSearchGet(url, env);
       if (method === 'POST') return scrapeSearchPost(request, env);
     }
-    if (r1 === 'import' && method === 'POST') return scrapeImport(request, env);
-    if (r1 === 'debug'  && method === 'GET')  return scrapeDebug(url, env);
+    if (r1 === 'import'      && method === 'POST') return scrapeImport(request, env);
+    if (r1 === 'debug'       && method === 'GET')  return scrapeDebug(url, env);
+    if (r1 === 'clear-cache' && method === 'POST') return clearCache(env);
   }
 
   return env.ASSETS.fetch(request);
@@ -454,6 +455,11 @@ async function setCache(env, query, results) {
   ).bind(cacheKey(query), JSON.stringify(results), new Date().toISOString()).run();
 }
 
+async function clearCache(env) {
+  const { meta } = await env.DB.prepare("DELETE FROM search_cache WHERE results_json = '[]'").run();
+  return json({ deleted: meta.changes });
+}
+
 async function doSearch(query, maxPages, env) {
   const cached = await getCached(env, query);
   if (cached !== undefined) {
@@ -528,10 +534,12 @@ async function scrapeDebug(url, env) {
     try {
       const r    = await fetch(proxyUrl, { headers: SCRAPE_HEADERS });
       const text = await r.text();
+      const lower = text.toLowerCase();
       result.worker_http_status = r.status;
       result.response_bytes     = text.length;
-      result.bot_detected       = text.toLowerCase().includes('pardon our interruption');
+      result.bot_detected       = lower.includes('pardon our interruption') || lower.includes('captcha') || lower.includes('robot check');
       result.parsed_count       = (await parseEbayHtml(text)).length;
+      result.html_snippet       = text.slice(0, 3000);
     } catch (e) { result.error = e.message; }
   }
 
@@ -582,44 +590,61 @@ async function scrapeEbay(query, maxPages, env) {
 // ── HTML parser (HTMLRewriter) ──────────────────────────────────────────────
 
 async function parseEbayHtml(html) {
+  // Try standard eBay list-view classes first, then card/grid-view classes
+  let results = await _parseWithPrefix(html, 's-item');
+  if (!results.length) results = await _parseWithPrefix(html, 's-card');
+  return results;
+}
+
+async function _parseWithPrefix(html, pfx) {
   const items = [];
   let cur = null;
   let fld = null;
 
   const rewriter = new HTMLRewriter()
-    .on('li[class*="s-card"]', {
+    .on(`li[class*="${pfx}"]`, {
       element(el) {
+        const cls = el.getAttribute('class') || '';
+        if (cls.includes('placeholder') || cls.includes('--load')) { cur = null; return; }
         cur = { _title: '', _price: '', url: null, _date: '', _cond: '', imgUrl: null };
         items.push(cur);
         fld = null;
       },
     })
-    .on('li[class*="s-card"] [class*="s-card__title"]', {
+    .on(`li[class*="${pfx}"] [class*="${pfx}__title"]`, {
       element(el) { if (cur) { fld = '_title'; el.onEndTag(() => { fld = null; }); } },
       text(t)     { if (cur && fld === '_title') cur._title += t.text; },
     })
-    .on('li[class*="s-card"] [class*="s-card__price"]', {
+    .on(`li[class*="${pfx}"] [class*="${pfx}__price"]`, {
       element(el) { if (cur) { fld = '_price'; el.onEndTag(() => { fld = null; }); } },
       text(t)     { if (cur && fld === '_price') cur._price += t.text; },
     })
-    .on('li[class*="s-card"] a[class*="s-card__link"]', {
+    .on(`li[class*="${pfx}"] a[class*="${pfx}__link"]`, {
       element(el) { if (cur) cur.url = el.getAttribute('href')?.split('?')[0] || null; },
     })
-    .on('li[class*="s-card"] [class*="s-card__subtitle"]', {
+    .on(`li[class*="${pfx}"] .POSITIVE`, {
       element(el) { if (cur && !cur._date) { fld = '_date'; el.onEndTag(() => { fld = null; }); } },
       text(t)     { if (cur && fld === '_date') cur._date += t.text; },
     })
-    .on('li[class*="s-card"] [class*="s-card__secondary-info"]', {
-      element(el) { if (cur) { fld = '_cond'; el.onEndTag(() => { fld = null; }); } },
+    .on(`li[class*="${pfx}"] [class*="${pfx}__subtitle"]`, {
+      element(el) { if (cur && !cur._date) { fld = '_date'; el.onEndTag(() => { fld = null; }); } },
+      text(t)     { if (cur && fld === '_date') cur._date += t.text; },
+    })
+    .on(`li[class*="${pfx}"] [class*="SECONDARY_INFO"]`, {
+      element(el) { if (cur && !cur._cond) { fld = '_cond'; el.onEndTag(() => { fld = null; }); } },
       text(t)     { if (cur && fld === '_cond') cur._cond += t.text; },
     })
-    .on('li[class*="s-card"] img[class*="s-card__image"]', {
+    .on(`li[class*="${pfx}"] [class*="${pfx}__secondary-info"]`, {
+      element(el) { if (cur && !cur._cond) { fld = '_cond'; el.onEndTag(() => { fld = null; }); } },
+      text(t)     { if (cur && fld === '_cond') cur._cond += t.text; },
+    })
+    .on(`li[class*="${pfx}"] img`, {
       element(el) {
-        if (cur) cur.imgUrl = el.getAttribute('data-defer-load') || el.getAttribute('src') || null;
+        if (cur && !cur.imgUrl)
+          cur.imgUrl = el.getAttribute('data-defer-load') || el.getAttribute('src') || null;
       },
     });
 
-  // Must await to consume the response body and trigger all handlers
   await rewriter.transform(new Response(html)).text();
 
   return items
