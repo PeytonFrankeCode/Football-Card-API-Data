@@ -531,7 +531,7 @@ async function scrapeDebug(url, env) {
       result.worker_http_status = r.status;
       result.response_bytes     = text.length;
       result.bot_detected       = text.toLowerCase().includes('pardon our interruption');
-      result.parsed_count       = parseEbayHtml(text).length;
+      result.parsed_count       = (await parseEbayHtml(text)).length;
     } catch (e) { result.error = e.message; }
   }
 
@@ -569,7 +569,7 @@ async function scrapeEbay(query, maxPages, env) {
     const lower = text.toLowerCase();
     if (lower.includes('pardon our interruption') || lower.includes('captcha') || lower.includes('robot check')) break;
 
-    const items = parseEbayHtml(text);
+    const items = await parseEbayHtml(text);
     if (!items.length) break;
     all.push(...items);
 
@@ -581,7 +581,7 @@ async function scrapeEbay(query, maxPages, env) {
 
 // ── HTML parser (HTMLRewriter) ──────────────────────────────────────────────
 
-function parseEbayHtml(html) {
+async function parseEbayHtml(html) {
   const items = [];
   let cur = null;
   let fld = null;
@@ -619,8 +619,8 @@ function parseEbayHtml(html) {
       },
     });
 
-  // Consume the response to trigger all handlers synchronously
-  rewriter.transform(new Response(html));
+  // Must await to consume the response body and trigger all handlers
+  await rewriter.transform(new Response(html)).text();
 
   return items
     .filter(item => item.url && item._title.trim() && !item._title.includes('Shop on eBay'))
