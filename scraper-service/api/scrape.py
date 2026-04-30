@@ -32,7 +32,27 @@ HEADERS = {
 @app.route("/", methods=["GET"])
 @app.route("/api/scrape", methods=["GET"])
 def health():
-    return jsonify({"status": "ok"})
+    if request.args.get("debug") != "true":
+        return jsonify({"status": "ok"})
+    # debug mode: do a live test fetch and return diagnostic info
+    params = urlencode({
+        "_nkw": "mahomes prizm", "LH_Complete": "1", "LH_Sold": "1",
+        "_pgn": "1", "_ipg": "60",
+    })
+    try:
+        with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=20) as client:
+            r = client.get(f"https://www.ebay.com/sch/i.html?{params}")
+        body = r.text
+        blocked = any(x in body.lower() for x in ["pardon our interruption", "captcha", "robot check", "access denied"])
+        items = _parse(body)
+        return jsonify({
+            "http_status": r.status_code,
+            "blocked": blocked,
+            "parsed_count": len(items),
+            "html_snippet": body[:500],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 
 @app.route("/", methods=["POST"])
