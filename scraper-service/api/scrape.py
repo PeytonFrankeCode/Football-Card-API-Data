@@ -30,11 +30,13 @@ HEADERS = {
 
 
 @app.route("/", methods=["GET"])
+@app.route("/api/scrape", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
 
 
 @app.route("/", methods=["POST"])
+@app.route("/api/scrape", methods=["POST"])
 def scrape():
     body = request.get_json(silent=True) or {}
     query = body.get("query", "")
