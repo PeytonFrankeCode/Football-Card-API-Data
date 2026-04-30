@@ -1,5 +1,4 @@
 from __future__ import annotations
-from http.server import BaseHTTPRequestHandler
 import json
 import re
 import time
@@ -8,6 +7,9 @@ from urllib.parse import urlencode
 
 import httpx
 from bs4 import BeautifulSoup
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
 
 HEADERS = {
     "User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -27,44 +29,21 @@ HEADERS = {
 }
 
 
-class handler(BaseHTTPRequestHandler):
-    def do_OPTIONS(self):
-        self._send(200, b"")
+@app.route("/", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"})
 
-    def do_GET(self):
-        self._send(200, json.dumps({"status": "ok"}).encode())
 
-    def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length) if length else b"{}"
-        try:
-            req = json.loads(body)
-        except Exception:
-            req = {}
-
-        query = req.get("query", "")
-        max_pages = min(int(req.get("max_pages", 1)), 2)
-
-        try:
-            results = _fetch_pages(query, max_pages)
-        except Exception:
-            results = []
-
-        self._send(200, json.dumps(results).encode())
-
-    def _send(self, code: int, payload: bytes):
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
-        if payload:
-            self.wfile.write(payload)
-
-    def log_message(self, format, *args):
-        pass
+@app.route("/", methods=["POST"])
+def scrape():
+    body = request.get_json(silent=True) or {}
+    query = body.get("query", "")
+    max_pages = min(int(body.get("max_pages", 1)), 2)
+    try:
+        results = _fetch_pages(query, max_pages)
+    except Exception:
+        results = []
+    return jsonify(results)
 
 
 def _fetch_pages(query: str, max_pages: int) -> list:
