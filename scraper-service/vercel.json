@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    { "source": "/scrape", "destination": "/api/scrape" },
+    { "source": "/health", "destination": "/api/scrape" }
+  ],
+  "functions": {
+    "api/scrape.py": {
+      "runtime": "python3.12",
+      "maxDuration": 10
+    }
+  }
+}
