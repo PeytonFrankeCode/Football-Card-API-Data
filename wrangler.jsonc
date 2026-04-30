@@ -10,7 +10,7 @@
   },
   "vars": {
     "CF_WORKER_URL": "https://ebay-proxy-gridironcards.thecardhuddleoffical.workers.dev",
-    "SCRAPER_URL":   ""
+    "SCRAPER_URL":   "https://football-card-api-data-cxmynh9o0-peyton-franke-s-projects.vercel.app"
   },
   "d1_databases": [
     {
