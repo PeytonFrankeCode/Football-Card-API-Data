@@ -1,31 +1,21 @@
 from __future__ import annotations
-import json
 import re
 import time
 from datetime import datetime
 from urllib.parse import urlencode
 
-import httpx
 from bs4 import BeautifulSoup
+from curl_cffi.requests import Session
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
 HEADERS = {
-    "User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language":           "en-US,en;q=0.9",
-    "Accept-Encoding":           "gzip, deflate, br",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Ch-Ua":                 '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-    "Sec-Ch-Ua-Mobile":          "?0",
-    "Sec-Ch-Ua-Platform":        '"Windows"',
-    "Sec-Fetch-Dest":            "document",
-    "Sec-Fetch-Mode":            "navigate",
-    "Sec-Fetch-Site":            "cross-site",
-    "Sec-Fetch-User":            "?1",
-    "Cache-Control":             "max-age=0",
-    "Referer":                   "https://www.google.com/",
+    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer":         "https://www.ebay.com/",
+    "DNT":             "1",
 }
 
 
@@ -34,14 +24,15 @@ HEADERS = {
 def health():
     if request.args.get("debug") != "true":
         return jsonify({"status": "ok"})
-    # debug mode: do a live test fetch and return diagnostic info
     params = urlencode({
         "_nkw": "mahomes prizm", "LH_Complete": "1", "LH_Sold": "1",
         "_pgn": "1", "_ipg": "60",
     })
     try:
-        with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=20) as client:
-            r = client.get(f"https://www.ebay.com/sch/i.html?{params}")
+        with Session(impersonate="chrome120") as s:
+            s.get("https://www.ebay.com", headers=HEADERS, timeout=10)
+            time.sleep(1)
+            r = s.get(f"https://www.ebay.com/sch/i.html?{params}", headers=HEADERS, timeout=20)
         body = r.text
         blocked = any(x in body.lower() for x in ["pardon our interruption", "captcha", "robot check", "access denied"])
         items = _parse(body)
@@ -70,29 +61,36 @@ def scrape():
 
 def _fetch_pages(query: str, max_pages: int) -> list:
     all_results = []
-    with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=20) as client:
+    with Session(impersonate="chrome120") as s:
+        # Warm up session cookies before hitting search
+        try:
+            s.get("https://www.ebay.com", headers=HEADERS, timeout=10)
+            time.sleep(1.5)
+        except Exception:
+            pass
+
         for page in range(1, max_pages + 1):
             params = urlencode({
                 "_nkw": query, "LH_Complete": "1", "LH_Sold": "1",
                 "_pgn": page, "_ipg": "60",
             })
             try:
-                r = client.get(f"https://www.ebay.com/sch/i.html?{params}")
+                r = s.get(f"https://www.ebay.com/sch/i.html?{params}", headers=HEADERS, timeout=20)
                 r.raise_for_status()
             except Exception:
                 break
 
-            body = r.text
-            if any(x in body.lower() for x in ["pardon our interruption", "captcha", "robot check", "access denied"]):
+            text = r.text
+            if any(x in text.lower() for x in ["pardon our interruption", "captcha", "robot check", "access denied"]):
                 break
 
-            items = _parse(body)
+            items = _parse(text)
             if not items:
                 break
             all_results.extend(items)
 
             if page < max_pages:
-                time.sleep(1.0)
+                time.sleep(2.0)
 
     return all_results
 
