@@ -1,5 +1,6 @@
 from __future__ import annotations
 import re
+import threading
 import time
 from datetime import datetime
 from urllib.parse import urlencode
@@ -9,6 +10,9 @@ from curl_cffi.requests import Session
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
+
+# Only one eBay fetch runs at a time — concurrent requests wait their turn
+_scrape_lock = threading.Lock()
 
 HEADERS = {
     "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -52,10 +56,15 @@ def scrape():
     body = request.get_json(silent=True) or {}
     query = body.get("query", "")
     max_pages = min(int(body.get("max_pages", 1)), 2)
+    acquired = _scrape_lock.acquire(timeout=25)
+    if not acquired:
+        return jsonify([]), 503
     try:
         results = _fetch_pages(query, max_pages)
     except Exception:
         results = []
+    finally:
+        _scrape_lock.release()
     return jsonify(results)
 
 

@@ -2,7 +2,7 @@
 // Static assets in frontend/ are served by Cloudflare Assets; this Worker handles all API routes.
 
 const CACHE_TTL_MS   = 24 * 60 * 60 * 1000;  // 24 h
-const BLOCKED_TTL_MS =  2 * 60 * 1000;         //  2 min
+const BLOCKED_TTL_MS = 15 * 60 * 1000;         // 15 min
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
