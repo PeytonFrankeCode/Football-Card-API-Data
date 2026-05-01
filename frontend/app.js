@@ -212,7 +212,12 @@ function clearSearch() {
 
 async function getApiKey() {
   const email = document.getElementById('api-email').value.trim();
-  if (!email) { alert('Please enter your email.'); return; }
+  const errEl = document.getElementById('api-key-error');
+  errEl.style.display = 'none';
+  if (!email) { errEl.textContent = 'Please enter your email.'; errEl.style.display = 'block'; return; }
+  const btn = document.querySelector('button[onclick="getApiKey()"]');
+  btn.textContent = 'Getting key…';
+  btn.disabled = true;
   try {
     const r = await fetch('/auth/register', {
       method: 'POST',
@@ -220,10 +225,15 @@ async function getApiKey() {
       body: JSON.stringify({ email }),
     });
     const data = await r.json();
+    if (!r.ok || !data.api_key) throw new Error(data.error || 'No key returned');
     document.getElementById('api-key-value').textContent = data.api_key;
     document.getElementById('api-key-result').style.display = 'block';
   } catch (e) {
-    alert('Could not generate key — please try again.');
+    errEl.textContent = 'Could not generate key — ' + e.message;
+    errEl.style.display = 'block';
+  } finally {
+    btn.textContent = 'Get API Key';
+    btn.disabled = false;
   }
 }
 

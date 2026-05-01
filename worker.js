@@ -415,11 +415,8 @@ async function authRegister(request, env) {
   }
 
   const key = 'gc_' + randomToken();
-  const row = await env.DB.prepare(
-    'INSERT INTO api_keys (email, key) VALUES (?, ?) RETURNING *'
-  ).bind(email, key).first();
-
-  return json({ email: row.email, api_key: row.key, message: 'API key created. Include it as the X-API-Key header in your requests.' }, 201);
+  await env.DB.prepare('INSERT INTO api_keys (email, key) VALUES (?, ?)').bind(email, key).run();
+  return json({ email, api_key: key, message: 'API key created. Include it as the X-API-Key header in your requests.' }, 201);
 }
 
 async function authMe(url, env) {
