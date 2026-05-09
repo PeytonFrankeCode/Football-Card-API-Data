@@ -1,8 +1,10 @@
 // GridironCards API — Cloudflare Worker backed by D1
 // Static assets in frontend/ are served by Cloudflare Assets; this Worker handles all API routes.
 
-const CACHE_TTL_MS   = 24 * 60 * 60 * 1000;  // 24 h
-const BLOCKED_TTL_MS = 15 * 60 * 1000;         // 15 min
+const CACHE_TTL_MS    = 24 * 60 * 60 * 1000;  // 24 h
+const BLOCKED_TTL_MS  = 15 * 60 * 1000;         // 15 min
+const SCRAPE_GAP_MS   =  6 * 1000;              //  6 s global min between eBay fetches
+const RATE_LIMIT_KEY  = '__global_rate_limit__';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -446,6 +448,27 @@ async function getCached(env, query) {
   return age < CACHE_TTL_MS ? data : undefined;
 }
 
+// Returns any non-empty cached result regardless of age (stale-while-revalidate fallback)
+async function getStaleCache(env, query) {
+  const row = await env.DB.prepare('SELECT results_json FROM search_cache WHERE query = ?').bind(cacheKey(query)).first();
+  if (!row) return undefined;
+  const data = JSON.parse(row.results_json);
+  return data.length ? data : undefined;
+}
+
+// Returns true and reserves the slot if enough time has passed since the last scrape
+async function reserveScrapeSlot(env) {
+  const row = await env.DB.prepare(
+    'SELECT results_json FROM search_cache WHERE query = ?'
+  ).bind(RATE_LIMIT_KEY).first();
+  const lastAt = row ? new Date(row.results_json).getTime() : 0;
+  if (Date.now() - lastAt < SCRAPE_GAP_MS) return false;
+  await env.DB.prepare(
+    'INSERT OR REPLACE INTO search_cache (query, results_json, cached_at) VALUES (?, ?, ?)'
+  ).bind(RATE_LIMIT_KEY, new Date().toISOString(), new Date().toISOString()).run();
+  return true;
+}
+
 async function setCache(env, query, results) {
   await env.DB.prepare(
     'INSERT OR REPLACE INTO search_cache (query, results_json, cached_at) VALUES (?, ?, ?)'
@@ -463,6 +486,16 @@ async function doSearch(query, maxPages, env) {
     if (!cached.length) return err('eBay is temporarily rate-limiting this search. Please try again in 15 minutes.', 503);
     return json(cached);
   }
+
+  // Global rate limit — all CF Worker instances share this D1 row
+  const slot = await reserveScrapeSlot(env);
+  if (!slot) {
+    // Slot taken: return stale cache if we have any, otherwise ask them to wait
+    const stale = await getStaleCache(env, query);
+    if (stale) return json(stale);
+    return err('Too many searches at once — please wait a few seconds and try again.', 429);
+  }
+
   const results = await scrapeEbay(query, maxPages, env);
   if (!results.length) {
     await setCache(env, query, []);
