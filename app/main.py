@@ -3,26 +3,51 @@ import logging
 import os
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 logging.basicConfig(level=logging.INFO)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.database import engine, Base
+from app.database import engine, Base, run_migrations
 from app.routers import players, cards, sales, analytics, scrape, auth
 
 Base.metadata.create_all(bind=engine)
+run_migrations()
 
 app = FastAPI(
     title="GridironCards API",
     description=(
         "Track and query sold data for American football cards. "
-        "Supports players, card listings, individual sales, eBay scraping, and price analytics."
+        "Supports players, card listings, individual sales, eBay scraping, and price analytics.\n\n"
+        "**Conventions:** prices are integer cents (e.g. 1599 = $15.99); dates are ISO 8601; "
+        "errors return `{\"status\": \"error\", \"error_message\": ...}`."
     ),
-    version="1.0.0",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+
+# ── Consistent error envelope (PriceCharting-style) ───────────────────────────
+# Every error response is { "status": "error", "error_message": <human text> }.
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"status": "error", "error_message": exc.detail},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"status": "error", "error_message": "Validation failed", "errors": exc.errors()},
+    )
 
 app.add_middleware(
     CORSMiddleware,

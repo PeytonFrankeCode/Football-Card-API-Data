@@ -199,6 +199,7 @@ async def import_ebay_sales(
             sale_date=listing.sale_date,
             platform="eBay",
             condition=listing.condition,
+            item_number=listing.item_number,
             notes=listing.title,
             listing_url=listing.listing_url,
         )

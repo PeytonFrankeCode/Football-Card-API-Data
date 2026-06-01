@@ -69,6 +69,9 @@ class Sale(Base):
     platform: Mapped[str | None] = mapped_column(String(50))  # e.g. eBay, COMC, StockX
     condition: Mapped[str | None] = mapped_column(String(20))  # Raw, PSA, BGS, SGC
     grade: Mapped[float | None] = mapped_column(Float)         # e.g. 9.5, 10
+    grade_company: Mapped[str | None] = mapped_column(String(20))   # PSA, BGS, SGC, CGC
+    seller: Mapped[str | None] = mapped_column(String(200))         # marketplace seller handle
+    item_number: Mapped[str | None] = mapped_column(String(50), index=True)  # stable listing id
     notes: Mapped[str | None] = mapped_column(Text)
     listing_url: Mapped[str | None] = mapped_column(String(500), unique=True)
     created_at: Mapped[datetime] = mapped_column(
