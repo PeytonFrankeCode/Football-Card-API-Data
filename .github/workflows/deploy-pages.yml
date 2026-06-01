@@ -21,8 +21,14 @@ jobs:
       - name: Install Wrangler
         run: npm install -g wrangler
 
-      - name: Apply D1 migrations
+      - name: Apply D1 base schema
         run: wrangler d1 execute gridironcards --file=schema.sql --remote
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Apply D1 migrations
+        run: wrangler d1 migrations apply gridironcards --remote
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

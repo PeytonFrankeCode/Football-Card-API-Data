@@ -534,9 +534,13 @@ async function scrapeImport(request, env) {
     if (!l.sale_date) { skipped++; continue; }
     try {
       const r = await env.DB.prepare(`
-        INSERT OR IGNORE INTO sales (card_id,sale_price,sale_date,platform,condition,notes,listing_url)
-        VALUES (?,?,?,'eBay',?,?,?) RETURNING id
-      `).bind(b.card_id, l.sale_price, l.sale_date, l.condition || null, l.title, l.listing_url || null).first();
+        INSERT OR IGNORE INTO sales (card_id,sale_price,sale_date,platform,condition,grade,grade_company,item_number,notes,listing_url)
+        VALUES (?,?,?,'eBay',?,?,?,?,?,?) RETURNING id
+      `).bind(
+        b.card_id, l.sale_price, l.sale_date, l.condition || null,
+        l.grade ?? null, l.grade_company || null, l.item_number || null,
+        l.title, l.listing_url || null
+      ).first();
       if (r) { ids.push(r.id); imported++; } else skipped++;
     } catch { errors++; }
   }

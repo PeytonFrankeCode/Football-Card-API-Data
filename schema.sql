@@ -27,15 +27,14 @@ CREATE TABLE IF NOT EXISTS sales (
   card_id     INTEGER NOT NULL,
   sale_price  REAL    NOT NULL,
   sale_date   TEXT    NOT NULL,
-  platform      TEXT,
-  condition     TEXT,
-  grade         REAL,
-  grade_company TEXT,
-  seller        TEXT,
-  item_number   TEXT,
-  notes         TEXT,
-  listing_url   TEXT UNIQUE,
-  created_at    TEXT DEFAULT (datetime('now')),
+  platform    TEXT,
+  condition   TEXT,
+  grade       REAL,
+  notes       TEXT,
+  listing_url TEXT UNIQUE,
+  created_at  TEXT DEFAULT (datetime('now')),
+  -- Columns added later live in migrations/ (applied via `wrangler d1 migrations apply`):
+  --   0001 → grade_company, seller, item_number
   FOREIGN KEY (card_id) REFERENCES cards(id)
 );
 

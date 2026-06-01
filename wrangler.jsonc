@@ -16,7 +16,8 @@
     {
       "binding": "DB",
       "database_name": "gridironcards",
-      "database_id": "23d5a4a9-006b-4856-b160-63862aa8a9c5"
+      "database_id": "23d5a4a9-006b-4856-b160-63862aa8a9c5",
+      "migrations_dir": "migrations"
     }
   ]
 }
