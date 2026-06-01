@@ -8,8 +8,10 @@ const API_BASE = window.location.hostname.endsWith('github.io')
 
 // ── Helpers ────────────────────────────────────────────────────
 
-function fmt$(n) {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
+function fmt$(cents) {
+  // API prices are integer cents (e.g. 1599 = $15.99).
+  if (cents == null) return '—';
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 }
 
 function fmtDate(iso) {

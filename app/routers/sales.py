@@ -27,8 +27,8 @@ def list_sales(
     player_id: int | None = Query(None),
     platform: str | None = Query(None, description="Partial match"),
     condition: str | None = Query(None),
-    min_price: float | None = Query(None, gt=0),
-    max_price: float | None = Query(None, gt=0),
+    min_price: int | None = Query(None, gt=0, description="Minimum price in integer cents"),
+    max_price: int | None = Query(None, gt=0, description="Maximum price in integer cents"),
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),
     skip: int = 0,
@@ -49,9 +49,9 @@ def list_sales(
     if condition:
         q = q.filter(models.Sale.condition.ilike(f"%{condition}%"))
     if min_price is not None:
-        q = q.filter(models.Sale.sale_price >= min_price)
+        q = q.filter(models.Sale.sale_price >= min_price / 100.0)
     if max_price is not None:
-        q = q.filter(models.Sale.sale_price <= max_price)
+        q = q.filter(models.Sale.sale_price <= max_price / 100.0)
     if date_from:
         q = q.filter(models.Sale.sale_date >= date_from)
     if date_to:
@@ -68,7 +68,9 @@ def get_sale(sale_id: int, db: Session = Depends(get_db)):
 def create_sale(payload: schemas.SaleCreate, db: Session = Depends(get_db)):
     if not db.get(models.Card, payload.card_id):
         raise HTTPException(status_code=404, detail="Card not found")
-    sale = models.Sale(**payload.model_dump())
+    data = payload.model_dump()
+    data["sale_price"] = data["sale_price"] / 100.0  # cents -> dollars for storage
+    sale = models.Sale(**data)
     db.add(sale)
     db.commit()
     db.refresh(sale)
@@ -83,6 +85,8 @@ def update_sale(sale_id: int, payload: schemas.SaleUpdate, db: Session = Depends
     updates = payload.model_dump(exclude_unset=True)
     if "card_id" in updates and not db.get(models.Card, updates["card_id"]):
         raise HTTPException(status_code=404, detail="Card not found")
+    if updates.get("sale_price") is not None:
+        updates["sale_price"] = updates["sale_price"] / 100.0  # cents -> dollars
     for field, value in updates.items():
         setattr(sale, field, value)
     db.commit()

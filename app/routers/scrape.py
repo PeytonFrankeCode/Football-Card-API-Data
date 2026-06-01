@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from app.database import get_db
 from app import models, schemas
 from app.scraper import scrape_sold_listings
+from app.ebay_browse import browse_configured, search_active_listings
 
 router = APIRouter(prefix="/scrape", tags=["Scrape"])
 log = logging.getLogger(__name__)
@@ -64,7 +65,7 @@ async def scrape_debug(test: bool = Query(False, description="Set to true to act
     """Show scraper configuration. Pass ?test=true to also fire a live eBay request."""
     import os, httpx
     from bs4 import BeautifulSoup
-    from app.scraper import _CF_WORKER_URL, _SCRAPER_API_KEY, _build_url, _parse_page
+    from app.scraper import _ebay_search_url, _routes, _parse_page, active_route
 
     cf_url = os.environ.get("CF_WORKER_URL", "")
     scraper_key = os.environ.get("SCRAPER_API_KEY", "")
@@ -72,11 +73,13 @@ async def scrape_debug(test: bool = Query(False, description="Set to true to act
         "scraper_api_configured": bool(scraper_key),
         "cf_worker_url_configured": bool(cf_url),
         "cf_worker_url": cf_url or "(not set)",
-        "active_proxy": "scraperapi" if scraper_key else ("cf_worker" if cf_url else "direct"),
+        "active_proxy": active_route(),
+        "browse_api_configured": browse_configured(),
     }
 
     if test and (cf_url or scraper_key):
-        test_url, extra = _build_url("mahomes prizm", 1)
+        # Use the highest-priority route, same as a real scrape.
+        _, test_url, extra = _routes(_ebay_search_url("mahomes prizm", 1))[0]
         result["proxied_request_url"] = test_url
         try:
             async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
@@ -142,6 +145,25 @@ async def search_ebay(payload: schemas.ScrapeSearchRequest, db: Session = Depend
     return results
 
 
+@router.get("/browse", response_model=list[schemas.BrowseListing])
+async def browse_active_listings(
+    query: str = Query(..., min_length=1, description="e.g. 'Patrick Mahomes 2017 Prizm PSA 10'"),
+    limit: int = Query(50, ge=1, le=200),
+    category_ids: str | None = Query(None, description="Optional eBay category ID(s), comma-separated"),
+):
+    """Search ACTIVE eBay listings via the official Browse API (no scraping).
+
+    Requires EBAY_CLIENT_ID / EBAY_CLIENT_SECRET. Returns 503 when unconfigured.
+    Note: this returns active listings, not sold/completed sales.
+    """
+    if not browse_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="eBay Browse API is not configured. Set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET.",
+        )
+    return await search_active_listings(query, limit=limit, category_ids=category_ids)
+
+
 @router.post("/import", response_model=schemas.ScrapeImportResult)
 async def import_ebay_sales(
     payload: schemas.ScrapeImportRequest,
@@ -177,6 +199,7 @@ async def import_ebay_sales(
             sale_date=listing.sale_date,
             platform="eBay",
             condition=listing.condition,
+            item_number=listing.item_number,
             notes=listing.title,
             listing_url=listing.listing_url,
         )
