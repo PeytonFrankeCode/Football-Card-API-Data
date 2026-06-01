@@ -11,6 +11,23 @@ from app import models, schemas
 from app.scraper import scrape_sold_listings
 from app.ebay_browse import browse_configured, search_active_listings
 
+
+def _title_matches_card(title: str, card: models.Card) -> bool:
+    """Loose guard so a broad query doesn't attach the wrong sales to a card.
+
+    Requires the player's last name and the card year to both appear in the
+    listing title. Brand is checked only when present on the card.
+    """
+    t = title.lower()
+    last_name = card.player.name.split()[-1].lower() if card.player and card.player.name else ""
+    if last_name and last_name not in t:
+        return False
+    if str(card.year) not in t:
+        return False
+    if card.brand and card.brand.lower() not in t:
+        return False
+    return True
+
 router = APIRouter(prefix="/scrape", tags=["Scrape"])
 log = logging.getLogger(__name__)
 
@@ -65,12 +82,20 @@ async def scrape_debug(test: bool = Query(False, description="Set to true to act
     """Show scraper configuration. Pass ?test=true to also fire a live eBay request."""
     import os, httpx
     from bs4 import BeautifulSoup
+    from app import scraper
     from app.scraper import _ebay_search_url, _routes, _parse_page, active_route
 
     cf_url = os.environ.get("CF_WORKER_URL", "")
     scraper_key = os.environ.get("SCRAPER_API_KEY", "")
     result = {
         "scraper_api_configured": bool(scraper_key),
+        "scraper_api_proxy": (
+            "ultra_premium" if scraper._SCRAPER_API_ULTRA
+            else "premium" if scraper._SCRAPER_API_PREMIUM
+            else "datacenter (default — often blocked by eBay)"
+        ),
+        "scraper_api_render": scraper._SCRAPER_API_RENDER,
+        "scraper_api_country": scraper._SCRAPER_API_COUNTRY,
         "cf_worker_url_configured": bool(cf_url),
         "cf_worker_url": cf_url or "(not set)",
         "active_proxy": active_route(),
@@ -193,12 +218,19 @@ async def import_ebay_sales(
             skipped += 1
             continue
 
+        # Don't attach sales whose title clearly isn't this card.
+        if payload.strict_match and not _title_matches_card(listing.title, card):
+            skipped += 1
+            continue
+
         sale = models.Sale(
             card_id=payload.card_id,
             sale_price=listing.sale_price,
             sale_date=listing.sale_date,
             platform="eBay",
             condition=listing.condition,
+            grade=listing.grade,
+            grade_company=listing.grade_company,
             item_number=listing.item_number,
             notes=listing.title,
             listing_url=listing.listing_url,

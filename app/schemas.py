@@ -187,6 +187,9 @@ class ScrapedListing(BaseModel):
     # Stable eBay item number parsed from the listing URL (e.g. /itm/123456789).
     # Used to de-duplicate the same listing appearing across pages.
     item_number: str | None = None
+    # Grading info parsed from the listing title (e.g. "PSA 10" -> PSA, 10.0).
+    grade: float | None = None
+    grade_company: str | None = None
 
     @field_serializer("sale_price", when_used="json")
     def _ser_sale_price(self, v: float) -> int | None:
@@ -219,6 +222,10 @@ class ScrapeImportRequest(BaseModel):
     card_id: int
     query: str = Field(..., min_length=1, description="eBay search query for this card")
     max_pages: int = Field(1, ge=1, le=5)
+    strict_match: bool = Field(
+        True,
+        description="Skip listings whose title doesn't match the card's player/year/brand",
+    )
 
 
 class ScrapeImportResult(BaseModel):
