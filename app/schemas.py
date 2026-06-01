@@ -152,6 +152,22 @@ class ScrapedListing(BaseModel):
     condition: str | None
     listing_url: str
     image_url: str | None = None
+    # Stable eBay item number parsed from the listing URL (e.g. /itm/123456789).
+    # Used to de-duplicate the same listing appearing across pages.
+    item_number: str | None = None
+
+
+class BrowseListing(BaseModel):
+    """An ACTIVE listing from the official eBay Browse API."""
+    item_id: str
+    title: str
+    price: float | None = None
+    currency: str | None = None
+    condition: str | None = None
+    image_url: str | None = None
+    item_web_url: str | None = None
+    seller: str | None = None
+    item_location: str | None = None
 
 
 class ScrapeSearchRequest(BaseModel):
