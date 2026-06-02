@@ -659,53 +659,128 @@ async function scrapeImport(request, env) {
   return json({ imported, skipped, errors, sales });
 }
 
+function activeRoute(env) {
+  if ((env.SCRAPER_API_KEY || '').trim()) return 'scraperapi';
+  if ((env.CF_WORKER_URL  || '').trim()) return 'cf_worker';
+  return 'direct';
+}
+
 async function scrapeDebug(url, env) {
-  const scraperUrl = (env.SCRAPER_URL || '').trim().replace(/\/$/, '');
+  const ultra = env.SCRAPER_API_ULTRA === 'true';
+  const premium = env.SCRAPER_API_PREMIUM === 'true';
   const result = {
-    scraper_url_configured: Boolean(scraperUrl),
-    scraper_url: scraperUrl || '(not set — deploy scraper-service and set SCRAPER_URL)',
-    note: 'Add ?test=true to fire a live test through the scraper service.',
+    mode: 'in-worker',
+    scraper_api_configured: Boolean((env.SCRAPER_API_KEY || '').trim()),
+    scraper_api_proxy: ultra ? 'ultra_premium' : premium ? 'premium'
+      : 'datacenter (default — often blocked by eBay)',
+    cf_worker_url_configured: Boolean((env.CF_WORKER_URL || '').trim()),
+    active_route: activeRoute(env),
+    note: 'Add ?test=true to fire a live eBay fetch through the active route.',
   };
 
   if (url.searchParams.get('test') === 'true') {
-    if (!scraperUrl) {
-      result.error = 'SCRAPER_URL not configured';
-    } else {
-      try {
-        const r    = await fetch(`${scraperUrl}/scrape`, {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ query: 'mahomes prizm', max_pages: 1 }),
-        });
-        const data = await r.json();
-        result.scraper_http_status = r.status;
-        result.parsed_count        = Array.isArray(data) ? data.length : 0;
-        result.sample              = Array.isArray(data) ? data.slice(0, 2) : data;
-      } catch (e) { result.error = e.message; }
+    const html = await fetchEbayHtml('mahomes prizm', 1, env);
+    result.fetched = Boolean(html);
+    result.bot_detected = html ? isBotHtml(html) : null;
+    if (html) {
+      const parsed = await parseEbayHtml(html);
+      result.parsed_count = parsed.length;
+      result.sample = parsed.slice(0, 2);
     }
   }
 
   return json(result);
 }
 
-// ── eBay scraper (delegates to external scraper-service) ────────────────────
+// ── eBay scraper (fetches + parses in-Worker) ───────────────────────────────
+
+const EBAY_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Referer': 'https://www.google.com/',
+  'Upgrade-Insecure-Requests': '1',
+  'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"Windows"',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'cross-site',
+};
+
+function buildEbaySearchUrl(query, page) {
+  const p = new URLSearchParams({
+    _nkw: query, LH_Complete: '1', LH_Sold: '1', _pgn: String(page), _ipg: '60',
+  });
+  return `https://www.ebay.com/sch/i.html?${p}`;
+}
+
+// Transport routes in priority order. ScraperAPI gives a residential IP (the
+// real fix for datacenter-IP blocking); CF_WORKER_URL is the existing eBay
+// proxy worker; direct is a last resort (usually blocked).
+function ebayRoutes(ebayUrl, env) {
+  const routes = [];
+  const key = (env.SCRAPER_API_KEY || '').trim();
+  if (key) {
+    const p = new URLSearchParams({ api_key: key, url: ebayUrl, country_code: env.SCRAPER_API_COUNTRY || 'us' });
+    if (env.SCRAPER_API_RENDER === 'true') p.set('render', 'true');
+    if (env.SCRAPER_API_ULTRA === 'true') p.set('ultra_premium', 'true');
+    else if (env.SCRAPER_API_PREMIUM === 'true') p.set('premium', 'true');
+    routes.push({ label: 'scraperapi', url: `https://api.scraperapi.com/?${p}`, headers: {} });
+  }
+  const cf = (env.CF_WORKER_URL || '').trim().replace(/\/$/, '');
+  if (cf) {
+    const headers = env.CF_WORKER_SECRET ? { 'X-Proxy-Secret': env.CF_WORKER_SECRET } : {};
+    routes.push({ label: 'cf_worker', url: `${cf}?url=${encodeURIComponent(ebayUrl)}`, headers });
+  }
+  routes.push({ label: 'direct', url: ebayUrl, headers: EBAY_HEADERS });
+  return routes;
+}
+
+function isBotHtml(html) {
+  const l = html.toLowerCase();
+  return l.includes('pardon our interruption') || l.includes('captcha')
+    || l.includes('robot check') || l.includes('access denied');
+}
+
+// Try each route with retry + backoff; a bot page is retryable (fresh proxy IP).
+async function fetchEbayHtml(query, page, env) {
+  const ebayUrl = buildEbaySearchUrl(query, page);
+  for (const route of ebayRoutes(ebayUrl, env)) {
+    let backoff = 1000;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const r = await fetch(route.url, { headers: route.headers });
+        if (r.ok) {
+          const html = await r.text();
+          if (!isBotHtml(html)) return html;
+        } else if (![429, 500, 502, 503, 504].includes(r.status)) {
+          break;  // non-retryable → next route
+        }
+      } catch { /* network error → retry */ }
+      if (attempt < 3) { await sleep(backoff + Math.random() * 500); backoff *= 2; }
+    }
+  }
+  return null;
+}
 
 async function scrapeEbay(query, maxPages, env) {
-  const scraperUrl = (env.SCRAPER_URL || '').trim().replace(/\/$/, '');
-  if (!scraperUrl) return [];
-
-  try {
-    const r = await fetch(`${scraperUrl}/scrape`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ query, max_pages: maxPages }),
-    });
-    if (!r.ok) return [];
-    const data = await r.json();
-    return Array.isArray(data) ? data : [];
-  } catch {
-    return [];
+  const all = [];
+  const seen = new Set();
+  for (let page = 1; page <= maxPages; page++) {
+    const html = await fetchEbayHtml(query, page, env);
+    if (!html) break;
+    const listings = await parseEbayHtml(html);
+    if (!listings.length) break;
+    for (const l of listings) {
+      const key = l.item_number || l.listing_url;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      all.push(l);
+    }
+    if (page < maxPages) await sleep(800 + Math.random() * 800);
   }
+  return all;
 }
 
 // ── HTML parser (HTMLRewriter) ──────────────────────────────────────────────
@@ -771,19 +846,39 @@ async function _parseWithPrefix(html, pfx) {
   return items
     .filter(item => item.url && item._title.trim() && !item._title.includes('Shop on eBay'))
     .map(item => {
+      const title = item._title.trim();
+      if (isJunk(title)) return null;                 // drop lots/reprints/customs
       const price = parsePrice(item._price.split(' to ')[0]);
       if (price === null) return null;
+      const [grade_company, grade] = parseGrade(title);
       return {
-        title:       item._title.trim(),
-        sale_price:  price,
-        sale_date:   parseDate(item._date),
-        condition:   item._cond.trim() || null,
-        listing_url: item.url,
-        image_url:   item.imgUrl,
+        title,
+        sale_price:    price,
+        sale_date:     parseDate(item._date),
+        condition:     item._cond.trim() || null,
+        listing_url:   item.url,
+        image_url:     item.imgUrl,
+        item_number:   itemNumber(item.url),
+        grade,
+        grade_company,
       };
     })
     .filter(Boolean);
 }
+
+const GRADE_RE = /\b(PSA|BGS|BVG|SGC|CGC|CSG|HGA|TAG)\s*\.?\s*(10|\d(?:\.5)?)\b/i;
+const JUNK_RE  = /\b(lot|lots|reprint|re-print|rp|repack|digital|custom|sticker|decal|proxy|aceo|novelty|case\s*break|box\s*break|read\s*description)\b/i;
+const ITEM_RE  = /\/itm\/(?:[^/]+\/)?(\d{6,})/;
+
+function parseGrade(title) {
+  const m = title.match(GRADE_RE);
+  if (!m) return [null, null];
+  const grade = parseFloat(m[2]);
+  return [m[1].toUpperCase(), Number.isNaN(grade) ? null : grade];
+}
+
+function isJunk(title)   { return JUNK_RE.test(title); }
+function itemNumber(url) { const m = (url || '').match(ITEM_RE); return m ? m[1] : null; }
 
 function parsePrice(text) {
   const m = text.replace(/,/g, '').match(/\d+\.?\d*/);

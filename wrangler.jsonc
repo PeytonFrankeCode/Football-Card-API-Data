@@ -9,8 +9,12 @@
     "directory": "frontend"
   },
   "vars": {
-    "CF_WORKER_URL": "https://ebay-proxy-gridironcards.thecardhuddleoffical.workers.dev",
-    "SCRAPER_URL":   "https://football-card-api-data.vercel.app/api"
+    // eBay fetching now happens inside this Worker. CF_WORKER_URL is the
+    // deployed eBay-proxy Worker used as a fallback route. For reliable
+    // (residential) fetches, set the SCRAPER_API_KEY secret:
+    //   wrangler secret put SCRAPER_API_KEY
+    // and optionally the SCRAPER_API_PREMIUM / SCRAPER_API_COUNTRY vars.
+    "CF_WORKER_URL": "https://ebay-proxy-gridironcards.thecardhuddleoffical.workers.dev"
   },
   "triggers": {
     "crons": ["*/30 * * * *"]
