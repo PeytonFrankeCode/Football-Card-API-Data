@@ -769,6 +769,7 @@ async function scrapeDebug(url, env) {
             bytes: html.length,
             bot: html ? isBotHtml(html) : null,
             results: html ? looksLikeResults(html) : false,
+            snippet: html ? html.slice(0, 300) : '',
           };
           report.push(entry);
           if (entry.results && !entry.bot) { got = html; break; }
