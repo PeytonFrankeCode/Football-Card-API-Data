@@ -714,8 +714,20 @@ async function scrapeDebug(url, env) {
 
   if (url.searchParams.get('reset_metrics') === 'true') {
     await clearMetrics(env);
+    await clearBreaker(env);   // also lift any active cooldown for a clean slate
     result.metrics_reset = true;
+    result.breaker_cleared = true;
   }
+  if (url.searchParams.get('reset_breaker') === 'true') {
+    await clearBreaker(env);
+    result.breaker_cleared = true;
+  }
+
+  // Circuit breaker state (an open breaker makes /scrape/search return "paused"
+  // without attempting a fetch). Clear it with ?reset_breaker=true.
+  const breaker = await getBreaker(env);
+  result.breaker_open = Date.now() < (breaker.until || 0);
+  result.breaker_until = breaker.until ? new Date(breaker.until).toISOString() : null;
 
   // Observed counters + derived rates so block rate can be measured, not guessed.
   const m = await getMetrics(env);
@@ -742,12 +754,32 @@ async function scrapeDebug(url, env) {
       result.parsed_count = listings ? listings.length : 0;
       result.sample = listings ? listings.slice(0, 2) : null;
     } else {
-      // Test the in-Worker path.
-      const html = await fetchEbayHtml('mahomes prizm', 1, env);
-      result.fetched = Boolean(html);
-      result.bot_detected = html ? isBotHtml(html) : null;
-      if (html) {
-        const parsed = await parseEbayHtml(html);
+      // Test each route once (bypasses the breaker) and report what each did,
+      // so you can see exactly which routes are reachable / blocked.
+      const ebayUrl = buildEbaySearchUrl('mahomes prizm', 1);
+      const report = [];
+      let got = null;
+      for (const route of ebayRoutes(ebayUrl, env)) {
+        try {
+          const r = await fetch(route.url, { headers: route.headers });
+          const html = r.ok ? await r.text() : '';
+          const entry = {
+            route: route.label,
+            status: r.status,
+            bytes: html.length,
+            bot: html ? isBotHtml(html) : null,
+            results: html ? looksLikeResults(html) : false,
+          };
+          report.push(entry);
+          if (entry.results && !entry.bot) { got = html; break; }
+        } catch (e) {
+          report.push({ route: route.label, error: String(e).slice(0, 100) });
+        }
+      }
+      result.route_report = report;
+      result.fetched = Boolean(got);
+      if (got) {
+        const parsed = await parseEbayHtml(got);
         result.parsed_count = parsed.length;
         result.sample = parsed.slice(0, 2);
       }
