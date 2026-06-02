@@ -1,3 +1,4 @@
 curl-cffi
 flask
 beautifulsoup4
+gunicorn

@@ -9,11 +9,13 @@
     "directory": "frontend"
   },
   "vars": {
-    // eBay fetching now happens inside this Worker. CF_WORKER_URL is the
-    // deployed eBay-proxy Worker used as a fallback route. For reliable
-    // (residential) fetches, set the SCRAPER_API_KEY secret:
-    //   wrangler secret put SCRAPER_API_KEY
-    // and optionally the SCRAPER_API_PREMIUM / SCRAPER_API_COUNTRY vars.
+    // Scraping order: if SCRAPER_URL is set, the Worker delegates the eBay fetch
+    // to that external service (deploy scraper-service/ on a free host whose IP
+    // eBay does not block, e.g. Render). Otherwise it fetches in-Worker, where
+    // CF_WORKER_URL is a fallback proxy route. Set after deploying the service:
+    //   wrangler secret put SCRAPER_URL      (or add as a plaintext var)
+    //   wrangler secret put SCRAPER_SECRET   (optional, must match the service)
+    // For residential proxying instead, set SCRAPER_API_KEY (+ SCRAPER_API_PREMIUM).
     "CF_WORKER_URL": "https://ebay-proxy-gridironcards.thecardhuddleoffical.workers.dev"
   },
   "triggers": {

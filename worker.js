@@ -700,14 +700,16 @@ function activeRoute(env) {
 async function scrapeDebug(url, env) {
   const ultra = env.SCRAPER_API_ULTRA === 'true';
   const premium = env.SCRAPER_API_PREMIUM === 'true';
+  const scraperUrl = (env.SCRAPER_URL || '').trim().replace(/\/$/, '');
   const result = {
-    mode: 'in-worker',
+    mode: scraperUrl ? 'delegated' : 'in-worker',
+    scraper_url: scraperUrl || '(not set — fetching in-Worker)',
     scraper_api_configured: Boolean((env.SCRAPER_API_KEY || '').trim()),
     scraper_api_proxy: ultra ? 'ultra_premium' : premium ? 'premium'
       : 'datacenter (default — often blocked by eBay)',
     cf_worker_url_configured: Boolean((env.CF_WORKER_URL || '').trim()),
-    active_route: activeRoute(env),
-    note: 'Add ?test=true to fire a live eBay fetch through the active route.',
+    active_route: scraperUrl ? 'delegated:' + scraperUrl : activeRoute(env),
+    note: 'Add ?test=true to fire a live eBay fetch through the active path.',
   };
 
   if (url.searchParams.get('reset_metrics') === 'true') {
@@ -733,13 +735,22 @@ async function scrapeDebug(url, env) {
   };
 
   if (url.searchParams.get('test') === 'true') {
-    const html = await fetchEbayHtml('mahomes prizm', 1, env);
-    result.fetched = Boolean(html);
-    result.bot_detected = html ? isBotHtml(html) : null;
-    if (html) {
-      const parsed = await parseEbayHtml(html);
-      result.parsed_count = parsed.length;
-      result.sample = parsed.slice(0, 2);
+    if (scraperUrl) {
+      // Test the delegated path (external scraper service).
+      const listings = await scrapeViaService(scraperUrl, 'mahomes prizm', 1, env);
+      result.service_reachable = listings !== null;
+      result.parsed_count = listings ? listings.length : 0;
+      result.sample = listings ? listings.slice(0, 2) : null;
+    } else {
+      // Test the in-Worker path.
+      const html = await fetchEbayHtml('mahomes prizm', 1, env);
+      result.fetched = Boolean(html);
+      result.bot_detected = html ? isBotHtml(html) : null;
+      if (html) {
+        const parsed = await parseEbayHtml(html);
+        result.parsed_count = parsed.length;
+        result.sample = parsed.slice(0, 2);
+      }
     }
   }
 
@@ -818,7 +829,40 @@ async function fetchEbayHtml(query, page, env) {
   return null;
 }
 
+// Delegates the eBay fetch to an external scraper service (e.g. one you deploy
+// on a free host whose IP eBay does not block). Returns parsed listings, or
+// null if the service is unreachable/errored so the caller can fall back.
+async function scrapeViaService(scraperUrl, query, maxPages, env) {
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (env.SCRAPER_SECRET) headers['X-Scraper-Secret'] = env.SCRAPER_SECRET;
+    const r = await fetch(`${scraperUrl}/scrape`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ query, max_pages: maxPages }),
+    });
+    if (!r.ok) return null;
+    const data = await r.json();
+    return Array.isArray(data) ? data : null;
+  } catch {
+    return null;
+  }
+}
+
 async function scrapeEbay(query, maxPages, env) {
+  const scraperUrl = (env.SCRAPER_URL || '').trim().replace(/\/$/, '');
+  let results = null;
+  if (scraperUrl) {
+    results = await scrapeViaService(scraperUrl, query, maxPages, env);
+  }
+  if (results === null) {
+    results = await scrapeInWorker(query, maxPages, env);  // fallback / default
+  }
+  await bumpMetric(env, results.length ? 'live_success' : 'live_blocked');
+  return results;
+}
+
+async function scrapeInWorker(query, maxPages, env) {
   const all = [];
   const seen = new Set();
   for (let page = 1; page <= maxPages; page++) {
@@ -834,7 +878,6 @@ async function scrapeEbay(query, maxPages, env) {
     }
     if (page < maxPages) await sleep(800 + Math.random() * 800);
   }
-  await bumpMetric(env, all.length ? 'live_success' : 'live_blocked');
   return all;
 }
 
