@@ -835,10 +835,14 @@ function ebayRoutes(ebayUrl, env) {
   // No guarantee (they're often datacenter IPs too), but free to try. Capped to
   // one slow attempt each. Set FREE_PROXIES=off to disable.
   if (env.FREE_PROXIES !== 'off') {
+    // Jina Reader renders pages on its own infra and handles a lot of anti-bot.
+    // Anonymous use is heavily rate-limited (429); a FREE Jina API key raises it.
+    const jinaHeaders = { 'X-Return-Format': 'html' };
+    if ((env.JINA_API_KEY || '').trim()) jinaHeaders['Authorization'] = `Bearer ${env.JINA_API_KEY.trim()}`;
     routes.push({
       label: 'jina',
       url: `https://r.jina.ai/${ebayUrl}`,
-      headers: { 'X-Return-Format': 'html' },
+      headers: jinaHeaders,
       attempts: 1,
     });
     routes.push({
