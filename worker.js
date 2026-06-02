@@ -1,10 +1,20 @@
 // GridironCards API — Cloudflare Worker backed by D1
 // Static assets in frontend/ are served by Cloudflare Assets; this Worker handles all API routes.
 
-const CACHE_TTL_MS    = 24 * 60 * 60 * 1000;  // 24 h
-const BLOCKED_TTL_MS  = 15 * 60 * 1000;         // 15 min
-const SCRAPE_GAP_MS   =  6 * 1000;              //  6 s global min between eBay fetches
+// Sold listings are immutable, so we cache aggressively and serve stale results
+// while refreshing in the background — most user searches never touch eBay.
+const CACHE_FRESH_MS  = 24 * 60 * 60 * 1000;       // serve directly, no refetch
+const CACHE_STALE_MS  =  7 * 24 * 60 * 60 * 1000;  // serve stale + refresh in background
+const BLOCKED_TTL_MS  = 15 * 60 * 1000;            // negative-cache a blocked query
+const SCRAPE_GAP_MS   =  6 * 1000;                 // global min between eBay fetches
 const RATE_LIMIT_KEY  = '__global_rate_limit__';
+
+// Circuit breaker: when eBay starts blocking us, pause ALL live fetches for an
+// escalating cooldown so we stop poking it (which is what hardens a temp block).
+const BREAKER_KEY     = '__circuit_breaker__';
+const BREAKER_BASE_MS = 15 * 60 * 1000;            // first cooldown
+const BREAKER_MAX_MS  = 60 * 60 * 1000;            // cap
+const PREWARM_LIMIT   = 8;                          // top-N popular queries per cron run
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -24,7 +34,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // ── Entry point ────────────────────────────────────────────────────────────
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         headers: {
@@ -36,17 +46,23 @@ export default {
     }
 
     try {
-      return await route(request, env);
+      return await route(request, env, ctx);
     } catch (e) {
       console.error(e);
       return err(e.message || 'Internal server error', 500);
     }
   },
+
+  // Cloudflare Cron Trigger — pre-warm popular searches so user traffic hits
+  // warm cache instead of hammering eBay live.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(prewarm(env));
+  },
 };
 
 // ── Router ─────────────────────────────────────────────────────────────────
 
-async function route(request, env) {
+async function route(request, env, ctx) {
   const url    = new URL(request.url);
   const method = request.method;
   const seg    = url.pathname.replace(/\/$/, '').split('/').filter(Boolean);
@@ -109,8 +125,8 @@ async function route(request, env) {
 
   if (r0 === 'scrape') {
     if (r1 === 'search') {
-      if (method === 'GET')  return scrapeSearchGet(url, env);
-      if (method === 'POST') return scrapeSearchPost(request, env);
+      if (method === 'GET')  return scrapeSearchGet(url, env, ctx);
+      if (method === 'POST') return scrapeSearchPost(request, env, ctx);
     }
     if (r1 === 'import'      && method === 'POST') return scrapeImport(request, env);
     if (r1 === 'debug'       && method === 'GET')  return scrapeDebug(url, env);
@@ -439,13 +455,16 @@ function randomToken() {
 
 function cacheKey(query) { return query.toLowerCase().trim(); }
 
-async function getCached(env, query) {
-  const row = await env.DB.prepare('SELECT * FROM search_cache WHERE query = ?').bind(cacheKey(query)).first();
-  if (!row) return undefined;
-  const age  = Date.now() - new Date(row.cached_at).getTime();
-  const data = JSON.parse(row.results_json);
-  if (!data.length) return age < BLOCKED_TTL_MS ? [] : undefined;
-  return age < CACHE_TTL_MS ? data : undefined;
+// Reads the cache row and classifies it: { data, ageMs, negative }.
+// negative === true means the query was blocked/empty last time.
+async function readCache(env, query) {
+  const row = await env.DB.prepare('SELECT results_json, cached_at FROM search_cache WHERE query = ?')
+    .bind(cacheKey(query)).first();
+  if (!row) return null;
+  let data;
+  try { data = JSON.parse(row.results_json); } catch { return null; }
+  if (!Array.isArray(data)) return null;
+  return { data, ageMs: Date.now() - new Date(row.cached_at).getTime(), negative: data.length === 0 };
 }
 
 // Returns any non-empty cached result regardless of age (stale-while-revalidate fallback)
@@ -453,7 +472,42 @@ async function getStaleCache(env, query) {
   const row = await env.DB.prepare('SELECT results_json FROM search_cache WHERE query = ?').bind(cacheKey(query)).first();
   if (!row) return undefined;
   const data = JSON.parse(row.results_json);
-  return data.length ? data : undefined;
+  return Array.isArray(data) && data.length ? data : undefined;
+}
+
+// ── Circuit breaker ──────────────────────────────────────────────────────────
+
+async function getBreaker(env) {
+  const row = await env.DB.prepare('SELECT results_json FROM search_cache WHERE query = ?').bind(BREAKER_KEY).first();
+  if (!row) return { until: 0, level: 0 };
+  try { return JSON.parse(row.results_json); } catch { return { until: 0, level: 0 }; }
+}
+
+async function breakerOpen(env) {
+  return Date.now() < ((await getBreaker(env)).until || 0);
+}
+
+async function tripBreaker(env) {
+  const b = await getBreaker(env);
+  const level = Math.min((b.level || 0) + 1, 4);
+  const cooldown = Math.min(BREAKER_BASE_MS * 2 ** (level - 1), BREAKER_MAX_MS);
+  await env.DB.prepare('INSERT OR REPLACE INTO search_cache (query, results_json, cached_at) VALUES (?, ?, ?)')
+    .bind(BREAKER_KEY, JSON.stringify({ until: Date.now() + cooldown, level }), new Date().toISOString()).run();
+}
+
+async function clearBreaker(env) {
+  await env.DB.prepare('INSERT OR REPLACE INTO search_cache (query, results_json, cached_at) VALUES (?, ?, ?)')
+    .bind(BREAKER_KEY, JSON.stringify({ until: 0, level: 0 }), new Date().toISOString()).run();
+}
+
+// Tracks query popularity so the cron job knows what to pre-warm.
+async function bumpQueryStat(env, query) {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO query_stats (query, hits, last_at) VALUES (?, 1, ?)
+       ON CONFLICT(query) DO UPDATE SET hits = hits + 1, last_at = excluded.last_at`
+    ).bind(cacheKey(query), new Date().toISOString()).run();
+  } catch { /* query_stats may not exist yet on a stale deploy — non-fatal */ }
 }
 
 // Returns true and reserves the slot if enough time has passed since the last scrape
@@ -480,17 +534,49 @@ async function clearCache(env) {
   return json({ deleted: meta.changes });
 }
 
-async function doSearch(query, maxPages, env) {
-  const cached = await getCached(env, query);
-  if (cached !== undefined) {
-    if (!cached.length) return err('eBay is temporarily rate-limiting this search. Please try again in 15 minutes.', 503);
-    return json(cached);
+// Fetches a query live (subject to the breaker + global slot) and updates the
+// cache + breaker state. Shared by user-miss and background/cron refreshes.
+async function refreshQuery(query, maxPages, env) {
+  if (await breakerOpen(env)) return { ok: false, reason: 'breaker' };
+  if (!(await reserveScrapeSlot(env))) return { ok: false, reason: 'slot' };
+
+  const results = await scrapeEbay(query, maxPages, env);
+  if (results.length) {
+    await setCache(env, query, results);
+    await clearBreaker(env);
+    return { ok: true, results };
+  }
+  await setCache(env, query, []);   // negative-cache the block
+  await tripBreaker(env);
+  return { ok: false, reason: 'blocked' };
+}
+
+async function doSearch(query, maxPages, env, ctx) {
+  await bumpQueryStat(env, query);
+  const cached = await readCache(env, query);
+
+  if (cached) {
+    if (cached.negative) {
+      if (cached.ageMs < BLOCKED_TTL_MS) {
+        return err('eBay is temporarily rate-limiting this search. Please try again in 15 minutes.', 503);
+      }
+      // negative cache expired — fall through and try again
+    } else if (cached.ageMs < CACHE_FRESH_MS) {
+      return json(cached.data);                                  // fresh hit
+    } else if (cached.ageMs < CACHE_STALE_MS) {
+      // Stale-while-revalidate: serve now, refresh in the background.
+      if (ctx) ctx.waitUntil(refreshQuery(query, maxPages, env));
+      return json(cached.data);
+    }
   }
 
-  // Global rate limit — all CF Worker instances share this D1 row
-  const slot = await reserveScrapeSlot(env);
-  if (!slot) {
-    // Slot taken: return stale cache if we have any, otherwise ask them to wait
+  // Miss (or expired) — must fetch live, unless the breaker is open.
+  if (await breakerOpen(env)) {
+    if (cached && !cached.negative) return json(cached.data);    // serve any stale data
+    return err('eBay searches are paused briefly while we cool down. Please try again shortly.', 503);
+  }
+
+  if (!(await reserveScrapeSlot(env))) {
     const stale = await getStaleCache(env, query);
     if (stale) return json(stale);
     return err('Too many searches at once — please wait a few seconds and try again.', 429);
@@ -499,23 +585,44 @@ async function doSearch(query, maxPages, env) {
   const results = await scrapeEbay(query, maxPages, env);
   if (!results.length) {
     await setCache(env, query, []);
+    await tripBreaker(env);
+    const stale = await getStaleCache(env, query);
+    if (stale) return json(stale);
     return err('eBay is temporarily rate-limiting this search. Please try again in 15 minutes.', 503);
   }
   await setCache(env, query, results);
+  await clearBreaker(env);
   return json(results);
 }
 
-async function scrapeSearchGet(url, env) {
+// Cron entry point: refresh the most popular queries that have gone stale,
+// at a calm jittered pace, stopping early if eBay starts blocking.
+async function prewarm(env) {
+  if (await breakerOpen(env)) return;
+  const { results } = await env.DB.prepare(
+    'SELECT query FROM query_stats ORDER BY hits DESC LIMIT ?'
+  ).bind(PREWARM_LIMIT).all();
+
+  for (const row of results || []) {
+    const cached = await readCache(env, row.query);
+    if (cached && !cached.negative && cached.ageMs < CACHE_FRESH_MS) continue;  // still fresh
+    await refreshQuery(row.query, 1, env);
+    if (await breakerOpen(env)) break;                                          // got blocked — stop
+    await sleep(4000 + Math.floor(Math.random() * 3000));                       // calm, jittered
+  }
+}
+
+async function scrapeSearchGet(url, env, ctx) {
   const query    = url.searchParams.get('query');
   const maxPages = Math.min(parseInt(url.searchParams.get('max_pages') || '1'), 3);
   if (!query) return err('query parameter is required');
-  return doSearch(query, maxPages, env);
+  return doSearch(query, maxPages, env, ctx);
 }
 
-async function scrapeSearchPost(request, env) {
+async function scrapeSearchPost(request, env, ctx) {
   const b = await request.json();
   if (!b.query) return err('query is required');
-  return doSearch(b.query, Math.min(b.max_pages || 1, 5), env);
+  return doSearch(b.query, Math.min(b.max_pages || 1, 5), env, ctx);
 }
 
 async function scrapeImport(request, env) {

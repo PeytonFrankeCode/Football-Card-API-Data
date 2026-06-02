@@ -12,6 +12,9 @@
     "CF_WORKER_URL": "https://ebay-proxy-gridironcards.thecardhuddleoffical.workers.dev",
     "SCRAPER_URL":   "https://football-card-api-data.vercel.app/api"
   },
+  "triggers": {
+    "crons": ["*/30 * * * *"]
+  },
   "d1_databases": [
     {
       "binding": "DB",

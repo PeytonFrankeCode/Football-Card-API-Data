@@ -38,6 +38,13 @@ CREATE TABLE IF NOT EXISTS sales (
   FOREIGN KEY (card_id) REFERENCES cards(id)
 );
 
+-- Popularity counter so the cron pre-warm job knows which searches to refresh.
+CREATE TABLE IF NOT EXISTS query_stats (
+  query   TEXT PRIMARY KEY,
+  hits    INTEGER DEFAULT 0,
+  last_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS search_cache (
   query       TEXT PRIMARY KEY,
   results_json TEXT NOT NULL,
