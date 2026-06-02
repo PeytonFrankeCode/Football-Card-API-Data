@@ -798,6 +798,24 @@ function ebayRoutes(ebayUrl, env) {
     const headers = env.CF_WORKER_SECRET ? { 'X-Proxy-Secret': env.CF_WORKER_SECRET } : {};
     routes.push({ label: 'cf_worker', url: `${cf}?url=${encodeURIComponent(ebayUrl)}`, headers });
   }
+  // Free public fetch services (no key, no signup). They fetch from their own
+  // IPs — different from Cloudflare's — so they may get through where we can't.
+  // No guarantee (they're often datacenter IPs too), but free to try. Capped to
+  // one slow attempt each. Set FREE_PROXIES=off to disable.
+  if (env.FREE_PROXIES !== 'off') {
+    routes.push({
+      label: 'jina',
+      url: `https://r.jina.ai/${ebayUrl}`,
+      headers: { 'X-Return-Format': 'html' },
+      attempts: 1,
+    });
+    routes.push({
+      label: 'allorigins',
+      url: `https://api.allorigins.win/raw?url=${encodeURIComponent(ebayUrl)}`,
+      headers: {},
+      attempts: 1,
+    });
+  }
   routes.push({ label: 'direct', url: ebayUrl, headers: EBAY_HEADERS });
   return routes;
 }
@@ -808,22 +826,30 @@ function isBotHtml(html) {
     || l.includes('robot check') || l.includes('access denied');
 }
 
+// Only accept a page that actually looks like eBay search results, so a route
+// that returns non-eBay content (e.g. a reader service's cleaned markdown)
+// doesn't shadow a route that would have returned real listings.
+function looksLikeResults(html) {
+  return html.includes('s-item') || html.includes('s-card') || html.includes('srp-results');
+}
+
 // Try each route with retry + backoff; a bot page is retryable (fresh proxy IP).
 async function fetchEbayHtml(query, page, env) {
   const ebayUrl = buildEbaySearchUrl(query, page);
   for (const route of ebayRoutes(ebayUrl, env)) {
+    const maxAttempts = route.attempts || 3;
     let backoff = 1000;
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const r = await fetch(route.url, { headers: route.headers });
         if (r.ok) {
           const html = await r.text();
-          if (!isBotHtml(html)) return html;
+          if (!isBotHtml(html) && looksLikeResults(html)) return html;
         } else if (![429, 500, 502, 503, 504].includes(r.status)) {
           break;  // non-retryable → next route
         }
       } catch { /* network error → retry */ }
-      if (attempt < 3) { await sleep(backoff + Math.random() * 500); backoff *= 2; }
+      if (attempt < maxAttempts) { await sleep(backoff + Math.random() * 500); backoff *= 2; }
     }
   }
   return null;
