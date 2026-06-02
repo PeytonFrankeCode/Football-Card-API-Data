@@ -45,6 +45,14 @@ CREATE TABLE IF NOT EXISTS query_stats (
   last_at TEXT
 );
 
+-- Lightweight scrape metrics (cache hits, live successes/blocks, breaker trips)
+-- surfaced at /scrape/debug so block rate can be measured, not guessed.
+CREATE TABLE IF NOT EXISTS metrics (
+  name       TEXT PRIMARY KEY,
+  value      INTEGER DEFAULT 0,
+  updated_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS search_cache (
   query       TEXT PRIMARY KEY,
   results_json TEXT NOT NULL,

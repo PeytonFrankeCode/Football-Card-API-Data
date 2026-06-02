@@ -493,6 +493,7 @@ async function tripBreaker(env) {
   const cooldown = Math.min(BREAKER_BASE_MS * 2 ** (level - 1), BREAKER_MAX_MS);
   await env.DB.prepare('INSERT OR REPLACE INTO search_cache (query, results_json, cached_at) VALUES (?, ?, ?)')
     .bind(BREAKER_KEY, JSON.stringify({ until: Date.now() + cooldown, level }), new Date().toISOString()).run();
+  await bumpMetric(env, 'breaker_trips');
 }
 
 async function clearBreaker(env) {
@@ -508,6 +509,29 @@ async function bumpQueryStat(env, query) {
        ON CONFLICT(query) DO UPDATE SET hits = hits + 1, last_at = excluded.last_at`
     ).bind(cacheKey(query), new Date().toISOString()).run();
   } catch { /* query_stats may not exist yet on a stale deploy — non-fatal */ }
+}
+
+// ── Metrics ──────────────────────────────────────────────────────────────────
+async function bumpMetric(env, name, n = 1) {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO metrics (name, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(name) DO UPDATE SET value = value + ?, updated_at = excluded.updated_at`
+    ).bind(name, n, new Date().toISOString(), n).run();
+  } catch { /* metrics may not exist yet on a stale deploy — non-fatal */ }
+}
+
+async function getMetrics(env) {
+  const out = {};
+  try {
+    const { results } = await env.DB.prepare('SELECT name, value FROM metrics').all();
+    for (const r of results || []) out[r.name] = r.value;
+  } catch { /* ignore */ }
+  return out;
+}
+
+async function clearMetrics(env) {
+  try { await env.DB.prepare('DELETE FROM metrics').run(); } catch { /* ignore */ }
 }
 
 // Returns true and reserves the slot if enough time has passed since the last scrape
@@ -553,6 +577,12 @@ async function refreshQuery(query, maxPages, env) {
 
 async function doSearch(query, maxPages, env, ctx) {
   await bumpQueryStat(env, query);
+  const res = await doSearchInner(query, maxPages, env, ctx);
+  await bumpMetric(env, res.status < 400 ? 'searches_ok' : 'searches_err');
+  return res;
+}
+
+async function doSearchInner(query, maxPages, env, ctx) {
   const cached = await readCache(env, query);
 
   if (cached) {
@@ -562,9 +592,11 @@ async function doSearch(query, maxPages, env, ctx) {
       }
       // negative cache expired — fall through and try again
     } else if (cached.ageMs < CACHE_FRESH_MS) {
+      await bumpMetric(env, 'cache_hits');
       return json(cached.data);                                  // fresh hit
     } else if (cached.ageMs < CACHE_STALE_MS) {
       // Stale-while-revalidate: serve now, refresh in the background.
+      await bumpMetric(env, 'cache_hits');
       if (ctx) ctx.waitUntil(refreshQuery(query, maxPages, env));
       return json(cached.data);
     }
@@ -572,13 +604,13 @@ async function doSearch(query, maxPages, env, ctx) {
 
   // Miss (or expired) — must fetch live, unless the breaker is open.
   if (await breakerOpen(env)) {
-    if (cached && !cached.negative) return json(cached.data);    // serve any stale data
+    if (cached && !cached.negative) { await bumpMetric(env, 'cache_hits'); return json(cached.data); }
     return err('eBay searches are paused briefly while we cool down. Please try again shortly.', 503);
   }
 
   if (!(await reserveScrapeSlot(env))) {
     const stale = await getStaleCache(env, query);
-    if (stale) return json(stale);
+    if (stale) { await bumpMetric(env, 'cache_hits'); return json(stale); }
     return err('Too many searches at once — please wait a few seconds and try again.', 429);
   }
 
@@ -587,7 +619,7 @@ async function doSearch(query, maxPages, env, ctx) {
     await setCache(env, query, []);
     await tripBreaker(env);
     const stale = await getStaleCache(env, query);
-    if (stale) return json(stale);
+    if (stale) { await bumpMetric(env, 'cache_hits'); return json(stale); }
     return err('eBay is temporarily rate-limiting this search. Please try again in 15 minutes.', 503);
   }
   await setCache(env, query, results);
@@ -676,6 +708,28 @@ async function scrapeDebug(url, env) {
     cf_worker_url_configured: Boolean((env.CF_WORKER_URL || '').trim()),
     active_route: activeRoute(env),
     note: 'Add ?test=true to fire a live eBay fetch through the active route.',
+  };
+
+  if (url.searchParams.get('reset_metrics') === 'true') {
+    await clearMetrics(env);
+    result.metrics_reset = true;
+  }
+
+  // Observed counters + derived rates so block rate can be measured, not guessed.
+  const m = await getMetrics(env);
+  const liveAttempts = (m.live_success || 0) + (m.live_blocked || 0);
+  const servedTotal = (m.cache_hits || 0) + liveAttempts;
+  const pct = (num, den) => (den > 0 ? +(100 * num / den).toFixed(1) : null);
+  result.metrics = {
+    searches_ok: m.searches_ok || 0,
+    searches_err: m.searches_err || 0,
+    cache_hits: m.cache_hits || 0,
+    live_success: m.live_success || 0,
+    live_blocked: m.live_blocked || 0,
+    breaker_trips: m.breaker_trips || 0,
+    user_error_rate_pct: pct(m.searches_err || 0, (m.searches_ok || 0) + (m.searches_err || 0)),
+    ebay_block_rate_pct: pct(m.live_blocked || 0, liveAttempts),
+    cache_hit_rate_pct: pct(m.cache_hits || 0, servedTotal),
   };
 
   if (url.searchParams.get('test') === 'true') {
@@ -780,6 +834,7 @@ async function scrapeEbay(query, maxPages, env) {
     }
     if (page < maxPages) await sleep(800 + Math.random() * 800);
   }
+  await bumpMetric(env, all.length ? 'live_success' : 'live_blocked');
   return all;
 }
 
