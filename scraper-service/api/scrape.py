@@ -144,7 +144,14 @@ def _is_blocked(html: str) -> bool:
     return any(x in lower for x in ("pardon our interruption", "captcha", "robot check", "access denied"))
 
 
+# Optional shared secret: if SCRAPER_SECRET is set, callers must send it as the
+# X-Scraper-Secret header. Lets you keep the public scraper endpoint private to
+# your Worker.
+_SCRAPER_SECRET = os.environ.get("SCRAPER_SECRET", "")
+
+
 @app.route("/", methods=["GET"])
+@app.route("/health", methods=["GET"])
 @app.route("/api/scrape", methods=["GET"])
 def health():
     if request.args.get("debug") != "true":
@@ -172,9 +179,12 @@ def health():
 
 
 @app.route("/", methods=["POST"])
+@app.route("/scrape", methods=["POST"])
 @app.route("/api/scrape", methods=["POST"])
 def scrape():
     global _last_scrape_at
+    if _SCRAPER_SECRET and request.headers.get("X-Scraper-Secret") != _SCRAPER_SECRET:
+        return jsonify({"error": "unauthorized"}), 401
     body = request.get_json(silent=True) or {}
     query = body.get("query", "")
     max_pages = min(int(body.get("max_pages", 1)), 2)
